@@ -23,6 +23,7 @@ REST API (.env 에 API_KEY 를 넣으면 켜짐, 문서: http://서버:8000/docs
 import asyncio
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -267,8 +268,11 @@ def poll_summary(p: dict) -> str:
 def handle(text: str, user_key: str, room: str, now: datetime | None = None) -> tuple[str, list] | None:
     """카톡 명령어를 처리하고 (답장 텍스트, 버튼 목록) 을 돌려준다. 명령어가 아니면 None."""
     text = (text or "").strip()
-    if not text.startswith("!"):
+    # 단체방에서는 "@봇이름 !도움말" 처럼 멘션이 앞에 붙어 오므로, 첫 "!명령" 부터 읽는다
+    m = re.search(r"(?:^|\s)(![^\s!].*)$", text, re.S)
+    if not m:
         return None
+    text = m.group(1)
     parts = text[1:].split()
     if not parts:
         return None
