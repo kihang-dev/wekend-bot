@@ -5,9 +5,9 @@ set -e
 REPO="https://github.com/kihang-dev/wekend-bot.git"
 DIR="$HOME/wekend-bot"
 
-echo "== 1/5 필수 패키지 설치"
-sudo apt-get update -qq
-sudo apt-get install -y -qq git curl >/dev/null
+echo "== 1/5 필수 패키지 설치 (새 서버는 자동 업데이트가 끝날 때까지 몇 분 기다릴 수 있음)"
+sudo apt-get -o DPkg::Lock::Timeout=600 update -qq
+sudo apt-get -o DPkg::Lock::Timeout=600 install -y -qq git curl >/dev/null
 
 echo "== 2/5 메모리 보충 (스왑 1GB)"
 if ! swapon --show | grep -q /swapfile; then
