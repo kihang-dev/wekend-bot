@@ -479,7 +479,7 @@ def log(line: str) -> None:
 
 
 UPDATE_EXIT_CODE = 3          # run_bot.sh 가 이 코드를 받으면 즉시 재시작
-UPDATE_CHECK_SEC = 30         # GitHub 새 커밋 확인 주기(초)
+UPDATE_CHECK_SEC = int(os.environ.get("UPDATE_CHECK_SEC", "30"))  # GitHub 새 커밋 확인 주기(초). 서버는 300 권장
 
 
 def git(*args: str) -> str:
