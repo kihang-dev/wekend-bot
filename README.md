@@ -33,6 +33,29 @@ cp .env.example .env      # .env 에 봇 인증 토큰 입력 (저장소에 올�
 | `!수정 멤버 A B` | 참석 멤버 A → B 변경 |
 | `!삭제` | 진행중인 투표 삭제 |
 
+## 관리용 REST API
+`.env` 에 `API_KEY` 를 넣으면 봇과 함께 API가 켜집니다 (기본 포트 8000, `API_PORT` 로 변경).
+브라우저에서 `http://localhost:8000/docs` 를 열면 모든 API를 바로 시험해볼 수 있습니다.
+모든 요청에 `X-API-Key: <API_KEY>` 헤더가 필요합니다. `room` 은 카톡방 키로, `GET /polls` 에서 확인합니다.
+
+| 메서드 | 경로 | 설명 | 카톡 명령 |
+|---|---|---|---|
+| GET | `/polls` | 모든 카톡방의 투표 목록 | |
+| GET | `/polls/{room}` | 투표 상세 (참석·불참 명단, 마감 여부) | |
+| GET | `/polls/{room}/members` | 참석 인원 | `!멤버` |
+| POST | `/polls/{room}` | 투표 생성 `{"date":"261017","place":"달월"}` | `!투표` |
+| PATCH | `/polls/{room}` | 날짜·장소 수정 `{"date":"261024"}` / `{"place":"강남"}` | `!수정 날짜/장소` |
+| POST | `/polls/{room}/votes` | 이름으로 투표 `{"name":"홍길동","status":"참석"}` | `!참석` / `!불참` |
+| DELETE | `/polls/{room}/votes/{name}` | 명단에서 사람 빼기 | |
+| PUT | `/polls/{room}/members` | 참석 멤버 변경 `{"old":"A","new":"B"}` | `!수정 멤버` |
+| POST | `/polls/{room}/squad` | 스쿼드 구성 | `!스쿼드` |
+| DELETE | `/polls/{room}` | 투표 삭제 | `!삭제` |
+| GET | `/users` | 등록된 이름 목록 | |
+
+```bash
+curl -H "X-API-Key: $API_KEY" http://localhost:8000/polls
+```
+
 ## 파일
 - `kakao_bot.py` — 투표 봇
 - `tutorial_echo_bot.py` — 카카오 튜토리얼 에코 봇
