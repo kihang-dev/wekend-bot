@@ -50,6 +50,7 @@ Wants=network-online.target
 User=$USER
 WorkingDirectory=$DIR
 Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
 ExecStart=$DIR/run_bot.sh
 Restart=always
 RestartSec=5

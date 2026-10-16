@@ -4,6 +4,7 @@
 #   종료:   Ctrl+C
 cd "$(dirname "$0")"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+export PYTHONUNBUFFERED=1   # 로그가 바로바로 보이도록
 
 
 trap 'echo; echo "봇 실행기를 종료합니다."; exit 0' INT TERM
