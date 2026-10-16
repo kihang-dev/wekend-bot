@@ -389,18 +389,11 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
 
 # ============================ REST API ============================
 def poll_view(room: str, p: dict) -> dict:
+    """API 응답: 날짜, 장소, 참석 멤버"""
     return {
-        "room": room,
-        "title": p["title"],
         "date": p["date"],
         "place": p["place"],
-        "deadline": p["deadline"],
-        "closed": is_closed(p),
-        "closed_at": p.get("closed_at"),
-        "attend": list(p["attend"].values()),
-        "absent": list(p["absent"].values()),
-        "attend_count": len(p["attend"]),
-        "absent_count": len(p["absent"]),
+        "members": list(p["attend"].values()),
     }
 
 
@@ -442,6 +435,10 @@ def make_api(api_key: str):
     class MemberChange(BaseModel):
         old: str = Field(..., examples=["홍길동"], description="바꿀 참석자 이름")
         new: str = Field(..., examples=["김철수"], description="새 이름")
+
+    @app.get("/rooms", summary="카톡방 키 목록 (다른 API의 {room} 에 사용)")
+    def rooms():
+        return [{"room": r, "title": p["title"]} for r, p in list_polls().items()]
 
     @app.get("/polls", summary="모든 카톡방의 투표 목록")
     def all_polls():
