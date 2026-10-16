@@ -5,14 +5,15 @@
 cd "$(dirname "$0")"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
-if [ -f .env ]; then set -a; . ./.env; set +a; fi
-if [ -z "$BOT_TOKEN" ]; then
-  echo '.env 파일에 BOT_TOKEN="봇 인증 토큰" 을 적어주세요.'; exit 1
-fi
 
 trap 'echo; echo "봇 실행기를 종료합니다."; exit 0' INT TERM
 while true; do
   git pull --ff-only -q 2>/dev/null
+  # 재시작할 때마다 .env 를 다시 읽어 설정 변경도 반영
+  if [ -f .env ]; then set -a; . ./.env; set +a; fi
+  if [ -z "$BOT_TOKEN" ]; then
+    echo '.env 파일에 BOT_TOKEN="봇 인증 토큰" 을 적어주세요.'; exit 1
+  fi
   uv run --python 3.12 kakao_bot.py
   code=$?
   case $code in
