@@ -5,7 +5,7 @@
 # dependencies = ["httpx>=0.27", "websockets>=15.0", "fastapi>=0.110", "uvicorn>=0.29"]
 # ///
 """
-카톡 명령어
+카톡 명령어 (앞의 ! 는 생략 가능, 단체방 멘션도 인식)
   !도움말                  봇 사용법
   !이름 홍길동             내 이름 등록 (카카오가 닉네임을 보내주지 않아 최초 1회 필요)
   !투표 261017 달월        '261017 달월' 참석/불참 투표 생성 (다음주 수요일 23시 마감)
@@ -39,20 +39,21 @@ DEBUG = os.environ.get("DEBUG") == "1"
 GW_URL = "wss://bot-gateway.kakao.com/gateway"
 CALLBACK_URL = "https://kapi.kakao.com/v1/bot/callback"
 
-HELP_TEXT = """[봇 사용법]
-!이름 [닉네임] : 내 이름 등록 (처음 1회)
-!투표 날짜 장소 : 참석/불참 투표 생성
-   예) !투표 261017 달월
+HELP_TEXT = """[봇 사용법] (앞에 ! 는 붙여도, 안 붙여도 돼요)
+이름 [닉네임] : 내 이름 등록 (처음 1회)
+투표 날짜 장소 : 참석/불참 투표 생성
+   예) 투표 261017 달월
    → 해당 날짜 다음주 수요일 23시 마감
-!참석 / !불참 : 투표하기
-!멤버 : 참석 인원 확인
-!스쿼드 : 참석 인원으로 스쿼드 구성
-!수정 장소 [새 장소] : 장소 변경
-!수정 날짜 [YYMMDD] : 날짜 변경
-!수정 멤버 [A] [B] : 참석자 A → B 변경
-!삭제 : 진행중인 투표 삭제"""
+참석 / 불참 : 투표하기
+멤버 : 참석 인원 확인
+스쿼드 : 참석 인원으로 스쿼드 구성
+수정 장소 [새 장소] : 장소 변경
+수정 날짜 [YYMMDD] : 날짜 변경
+수정 멤버 [A] [B] : 참석자 A → B 변경
+투표종료 : 지금 바로 투표 마감
+삭제 : 진행중인 투표 삭제"""
 
-VOTE_HINT = "👉 !참석 또는 !불참 을 입력해주세요."
+VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
 VOTE_BUTTONS = [
     {"label": "참석", "action": "message", "messageText": "!참석"},
     {"label": "불참", "action": "message", "messageText": "!불참"},
@@ -104,7 +105,7 @@ class PollError(Exception):
         self.message, self.code = message, code
 
 
-NO_POLL = "진행중인 투표가 없어요. !투표 날짜 장소 로 만들어주세요."
+NO_POLL = "진행중인 투표가 없어요. 투표 날짜 장소 로 만들어주세요. 예) 투표 261017 달월"
 
 
 def now_kst() -> datetime:
@@ -112,7 +113,7 @@ def now_kst() -> datetime:
 
 
 def is_closed(poll: dict, now: datetime | None = None) -> bool:
-    return (now or now_kst()) > datetime.fromisoformat(poll["deadline"])
+    return bool(poll.get("closed_at")) or (now or now_kst()) > datetime.fromisoformat(poll["deadline"])
 
 
 def _require(polls: dict, room: str) -> dict:
@@ -160,7 +161,7 @@ def create_poll(room: str, date_str: str, place: str, creator: str, now: datetim
     polls = _load(POLLS_FILE)
     old = polls.get(room)
     if old and not is_closed(old, now):
-        raise PollError(f"이미 진행중인 투표가 있어요.\n'{old['title']}'\n먼저 !삭제 후 다시 만들어주세요.", 409)
+        raise PollError(f"이미 진행중인 투표가 있어요.\n'{old['title']}'\n먼저 투표종료 또는 삭제 후 다시 만들어주세요.", 409)
     poll = {
         "date": date_str,
         "place": place,
@@ -240,6 +241,17 @@ def replace_member(room: str, a: str, b: str) -> dict:
     return poll
 
 
+def close_poll(room: str, now: datetime | None = None) -> dict:
+    """투표를 지금 바로 마감한다."""
+    polls = _load(POLLS_FILE)
+    poll = _require(polls, room)
+    if is_closed(poll, now):
+        raise PollError(f"'{poll['title']}' 투표는 이미 마감되었어요.", 409)
+    poll["closed_at"] = (now or now_kst()).isoformat()
+    _save(POLLS_FILE, polls)
+    return poll
+
+
 def delete_poll(room: str) -> str:
     polls = _load(POLLS_FILE)
     title = _require(polls, room)["title"]
@@ -259,24 +271,44 @@ def poll_summary(p: dict) -> str:
     att, absn = list(p["attend"].values()), list(p["absent"].values())
     return "\n".join([
         f"🗳 {p['title']}",
-        f"마감: {fmt_deadline(p['deadline'])}",
+        f"마감: {fmt_deadline(p['closed_at'] if p.get('closed_at') else p['deadline'])}"
+        + (" (마감됨)" if p.get("closed_at") else ""),
         f"참석 {len(att)}명: {', '.join(att) if att else '-'}",
         f"불참 {len(absn)}명: {', '.join(absn) if absn else '-'}",
     ])
 
 
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료"}
+
+
+def parse_command(text: str) -> tuple[str, list[str]] | None:
+    """메시지에서 (명령, 인자들) 을 꺼낸다. 명령이 아니면 None.
+    - 맨 앞 단어가 명령이면 인식 ('!' 는 있어도 없어도 됨): "참석", "!투표 261017 달월"
+    - 단체방 멘션이 앞에 붙은 경우도 인식: "@위켄봇 도움말", "@위켄 봇 !멤버"
+    - 문장 중간의 단어는 무시: "나 내일 참석" → 명령 아님
+    """
+    words = (text or "").split()
+    if not words:
+        return None
+    start = 0
+    if words[0].startswith("@"):  # 멘션: 봇 이름에 띄어쓰기가 있어도 3단어까지 건너뜀
+        start = next((i for i in range(1, min(len(words), 4)) if words[i].lstrip("!") in COMMANDS), None)
+        if start is None:
+            return None
+    cmd, args = words[start].lstrip("!"), words[start + 1:]
+    if cmd not in COMMANDS:
+        return None
+    if cmd == "투표" and args[:1] == ["종료"]:  # "투표 종료" 도 허용
+        cmd, args = "투표종료", args[1:]
+    return cmd, args
+
+
 def handle(text: str, user_key: str, room: str, now: datetime | None = None) -> tuple[str, list] | None:
     """카톡 명령어를 처리하고 (답장 텍스트, 버튼 목록) 을 돌려준다. 명령어가 아니면 None."""
-    text = (text or "").strip()
-    # 단체방에서는 "@봇이름 !도움말" 처럼 멘션이 앞에 붙어 오므로, 첫 "!명령" 부터 읽는다
-    m = re.search(r"(?:^|\s)(![^\s!].*)$", text, re.S)
-    if not m:
+    parsed = parse_command(text)
+    if not parsed:
         return None
-    text = m.group(1)
-    parts = text[1:].split()
-    if not parts:
-        return None
-    cmd, args = parts[0], parts[1:]
+    cmd, args = parsed
     try:
         return _dispatch(cmd, args, user_key, room, now)
     except PollError as e:
@@ -290,13 +322,13 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
     if cmd == "이름":
         if not args:
             current = _load(USERS_FILE).get(user_key, "없음")
-            return f"사용법: !이름 [닉네임]\n현재 등록된 이름: {current}", []
+            return f"사용법: 이름 [닉네임]\n현재 등록된 이름: {current}", []
         name = register_name(user_key, " ".join(args))
         return f"이름을 '{name}'(으)로 등록했어요.", []
 
     if cmd == "투표":
         if len(args) < 2:
-            return "사용법: !투표 날짜 장소\n예) !투표 261017 달월", []
+            return "사용법: 투표 날짜 장소\n예) 투표 261017 달월", []
         poll = create_poll(room, args[0], " ".join(args[1:]), user_key, now)
         return f"투표가 생성되었습니다!\n{poll_summary(poll)}\n\n{VOTE_HINT}", VOTE_BUTTONS
 
@@ -306,7 +338,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             register_name(user_key, " ".join(args))
         name = _load(USERS_FILE).get(user_key)
         if not name:
-            return "먼저 이름을 알려주세요.\n예) !이름 홍길동\n(본인 이름을 최초 등록해주세요.)", []
+            return "먼저 이름을 알려주세요.\n예) 이름 홍길동\n(본인 이름을 최초 등록해주세요.)", []
         poll = cast_vote(room, user_key, name, SIDES[cmd], now)
         return f"{name}님 {cmd}으로 기록했어요.\n{poll_summary(poll)}", []
 
@@ -321,32 +353,38 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         return make_squad(room), []
 
     if cmd == "수정":
-        usage = "사용법: !수정 장소 [새 장소] / !수정 날짜 [YYMMDD] / !수정 멤버 [A] [B]"
+        usage = "사용법: 수정 장소 [새 장소] / 수정 날짜 [YYMMDD] / 수정 멤버 [A] [B]"
         if not args:
             get_poll(room)
             return usage, []
         sub, sub_args = args[0], args[1:]
         if sub == "장소":
             if not sub_args:
-                return "사용법: !수정 장소 [새 장소]", []
+                return "사용법: 수정 장소 [새 장소]", []
             poll = update_poll(room, place=" ".join(sub_args))
         elif sub == "날짜":
             if not sub_args or not parse_date(sub_args[0]):
                 get_poll(room)
-                return "사용법: !수정 날짜 [YYMMDD]  예) !수정 날짜 261024", []
+                return "사용법: 수정 날짜 [YYMMDD]  예) 수정 날짜 261024", []
             poll = update_poll(room, date_str=sub_args[0])
         elif sub == "멤버":
             if len(sub_args) != 2:
-                return "사용법: !수정 멤버 [기존 이름] [새 이름]", []
+                return "사용법: 수정 멤버 [기존 이름] [새 이름]", []
             poll = replace_member(room, *sub_args)
         else:
             return "수정할 항목은 장소 / 날짜 / 멤버 중 하나예요.", []
         return f"수정되었습니다.\n{poll_summary(poll)}", []
 
+    if cmd == "투표종료":
+        poll = close_poll(room, now)
+        att = list(poll["attend"].values())
+        body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "참석자 없음"
+        return f"🔒 '{poll['title']}' 투표를 마감했습니다.\n\n[최종 결과]\n{poll_summary(poll)}\n\n참석 명단\n{body}", []
+
     if cmd == "삭제":
         return f"'{delete_poll(room)}' 투표를 삭제했습니다.", []
 
-    return "모르는 명령어예요. !도움말 을 입력해보세요.", []
+    return "모르는 명령어예요. 도움말 을 입력해보세요.", []
 
 
 # ============================ REST API ============================
@@ -358,6 +396,7 @@ def poll_view(room: str, p: dict) -> dict:
         "place": p["place"],
         "deadline": p["deadline"],
         "closed": is_closed(p),
+        "closed_at": p.get("closed_at"),
         "attend": list(p["attend"].values()),
         "absent": list(p["absent"].values()),
         "attend_count": len(p["attend"]),
@@ -444,6 +483,10 @@ def make_api(api_key: str):
     @app.post("/polls/{room}/squad", summary="스쿼드 구성 (!스쿼드)")
     def squad(room: str):
         return {"result": make_squad(room)}
+
+    @app.post("/polls/{room}/close", summary="지금 바로 투표 마감 (투표종료)")
+    def close(room: str):
+        return poll_view(room, close_poll(room))
 
     @app.delete("/polls/{room}", summary="투표 삭제 (!삭제)")
     def delete(room: str):
