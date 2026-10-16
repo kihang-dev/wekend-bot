@@ -35,7 +35,9 @@ cp .env.example .env      # .env 에 봇 인증 토큰 입력 (저장소에 올�
 | `수정 날짜 261024` | 진행중인 투표 날짜 변경 (마감일 재계산) |
 | `수정 멤버 A B` | 참석 멤버 A → B 변경 |
 | `투표종료` (`투표 종료`) | 지금 바로 투표 마감 + 최종 결과 |
-| `삭제` | 진행중인 투표 삭제 |
+| `투표조회` | 이 카톡방의 투표 목록 (번호, 🟢진행중/🔒마감, 참석 수) |
+| `투표조회 2` | 2번 투표 상세 |
+| `투표삭제 1` | 1번 투표 삭제 (번호 없이 `투표삭제`/`삭제` 는 최근 투표) |
 
 ## 관리용 REST API
 `.env` 에 `API_KEY` 를 넣으면 봇과 함께 API가 켜집니다 (기본 포트 8000, `API_PORT` 로 변경).
@@ -54,7 +56,10 @@ cp .env.example .env      # .env 에 봇 인증 토큰 입력 (저장소에 올�
 | DELETE | `/polls/{room}/votes/{name}` | 명단에서 사람 빼기 | |
 | PUT | `/polls/{room}/members` | 참석 멤버 변경 `{"old":"A","new":"B"}` | `!수정 멤버` |
 | POST | `/polls/{room}/squad` | 스쿼드 구성 | `!스쿼드` |
-| DELETE | `/polls/{room}` | 투표 삭제 | `!삭제` |
+| GET | `/polls/{room}/list` | 카톡방의 투표 목록 (번호 포함) | `투표조회` |
+| GET | `/polls/{room}/{no}` | 번호로 투표 조회 | `투표조회 2` |
+| DELETE | `/polls/{room}/{no}` | 번호로 투표 삭제 | `투표삭제 1` |
+| DELETE | `/polls/{room}` | 최근 투표 삭제 | `삭제` |
 | POST | `/polls/{room}/close` | 지금 바로 마감 | `투표종료` |
 | GET | `/users` | 등록된 이름 목록 | |
 
@@ -67,4 +72,4 @@ curl -H "X-API-Key: $API_KEY" http://localhost:8000/polls
 - `tutorial_echo_bot.py` — 카카오 튜토리얼 에코 봇
 - `setup_venv6.sh` — uv 설치 확인 및 가상환경 생성
 
-투표 기록(`polls.json`)과 이름 등록(`users.json`)은 실행 폴더에 저장되며 저장소에는 올라가지 않습니다.
+투표 기록(`polls.json`, 마감된 투표도 번호와 함께 보관)과 이름 등록(`users.json`)은 실행 폴더에 저장되며 저장소에는 올라가지 않습니다.
