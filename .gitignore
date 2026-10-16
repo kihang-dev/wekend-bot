@@ -11,3 +11,6 @@ events.log
 
 # 토큰 등 비밀값
 .env
+
+# 자동 푸시 기록
+auto_push.log

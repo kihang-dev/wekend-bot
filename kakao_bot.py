@@ -238,13 +238,71 @@ def log(line: str) -> None:
             f.write(line + "\n")
 
 
-async def main() -> None:
+UPDATE_EXIT_CODE = 3          # run_bot.sh 가 이 코드를 받으면 즉시 재시작
+UPDATE_CHECK_SEC = 30         # GitHub 새 커밋 확인 주기(초)
+
+
+def git(*args: str) -> str:
+    """봇 폴더에서 git 명령을 실행하고 출력을 돌려준다. 실패하면 빈 문자열."""
+    import subprocess
+
+    try:
+        r = subprocess.run(["git", *args], cwd=HERE, capture_output=True, text=True, timeout=60)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+async def watch_updates(start_head: str, stop: asyncio.Event) -> None:
+    """GitHub에 새 커밋이 올라오면 받아오고, 코드가 바뀌었으면 재시작을 요청한다."""
+    auto_push = os.environ.get("AUTO_PUSH") == "1" and (HERE / "auto_push.sh").exists()
+    while not stop.is_set():
+        await asyncio.sleep(UPDATE_CHECK_SEC)
+        # 개발 맥: 폴더에서 바뀐 파일이 있으면 자동 커밋·푸시 (.env 에 AUTO_PUSH=1)
+        if auto_push and await asyncio.to_thread(git, "status", "--porcelain"):
+            import subprocess
+
+            print("변경된 파일 감지 → GitHub에 커밋·푸시")
+            await asyncio.to_thread(subprocess.run, ["bash", str(HERE / "auto_push.sh")], cwd=HERE)
+        await asyncio.to_thread(git, "fetch", "-q", "origin")
+        behind = await asyncio.to_thread(git, "rev-list", "--count", "HEAD..@{u}")
+        if behind and behind != "0":
+            print(f"GitHub에 새 커밋 {behind}개 → 받아오는 중")
+            await asyncio.to_thread(git, "pull", "--ff-only", "-q")
+        head = await asyncio.to_thread(git, "rev-parse", "HEAD")
+        if head and head != start_head:
+            print(f"새 버전 감지 ({start_head[:7]} → {head[:7]}) → 재시작합니다")
+            stop.set()
+
+
+async def main() -> int:
     import websockets
 
     token = os.environ.get("BOT_TOKEN")
     if not token:
-        sys.exit('BOT_TOKEN 환경변수가 없습니다. 먼저 export BOT_TOKEN="봇 인증 토큰" 을 실행하세요.')
+        sys.exit('BOT_TOKEN 환경변수가 없습니다. .env 파일이나 export BOT_TOKEN="봇 인증 토큰" 으로 설정하세요.')
 
+    start_head = git("rev-parse", "HEAD")
+    print(f"봇 시작 (버전 {start_head[:7] or '알수없음'})")
+    stop = asyncio.Event()
+    if start_head:
+        asyncio.create_task(watch_updates(start_head, stop))
+
+    retry = 1
+    while not stop.is_set():
+        try:
+            await run_gateway(websockets, token, stop)
+            retry = 1
+        except Exception as e:  # 연결 끊김 등 → 잠시 후 재접속
+            if stop.is_set():
+                break
+            print(f"연결 끊김: {e!r} → {retry}초 후 재접속")
+            await asyncio.sleep(retry)
+            retry = min(retry * 2, 60)
+    return UPDATE_EXIT_CODE
+
+
+async def run_gateway(websockets, token: str, stop: asyncio.Event) -> None:
     async with websockets.connect(GW_URL) as ws:
         hello = json.loads(await ws.recv())
         await ws.send(json.dumps({"op": 2, "d": {"token": token}}))
@@ -252,25 +310,36 @@ async def main() -> None:
         print("게이트웨이 연결 성공")
 
         interval = hello["d"]["heartbeat_interval"] / 1000
-        asyncio.create_task(heartbeat(ws, interval))
+        hb = asyncio.create_task(heartbeat(ws, interval))
+        closer = asyncio.create_task(close_on(stop, ws))
+        try:
+            async for raw in ws:
+                event = json.loads(raw)
+                if event.get("t") != "MESSAGE_CREATE":
+                    continue
+                d = event["d"]
+                log("RAW " + json.dumps(event, ensure_ascii=False))
+                user_key = d.get("botUserKey", "unknown")
+                room = d.get("botGroupKey", "default")
+                content = d.get("content", "")
+                print(f"RECV {user_key[-6:]}: {content}")
+                try:
+                    result = handle(content, user_key, room)
+                except Exception as e:  # 명령 처리 오류가 봇 전체를 멈추지 않도록
+                    print("ERROR:", repr(e))
+                    result = ("처리 중 오류가 발생했어요.", [])
+                if result and d.get("callbackToken"):
+                    await reply(token, d["callbackToken"], *result)
+        finally:
+            hb.cancel()
+            closer.cancel()
+        if not stop.is_set():
+            raise ConnectionError("게이트웨이가 연결을 닫음")
 
-        async for raw in ws:
-            event = json.loads(raw)
-            if event.get("t") != "MESSAGE_CREATE":
-                continue
-            d = event["d"]
-            log("RAW " + json.dumps(event, ensure_ascii=False))
-            user_key = d.get("botUserKey", "unknown")
-            room = d.get("botGroupKey", "default")
-            content = d.get("content", "")
-            print(f"RECV {user_key[-6:]}: {content}")
-            try:
-                result = handle(content, user_key, room)
-            except Exception as e:  # 명령 처리 오류가 봇 전체를 멈추지 않도록
-                print("ERROR:", repr(e))
-                result = ("처리 중 오류가 발생했어요.", [])
-            if result and d.get("callbackToken"):
-                await reply(token, d["callbackToken"], *result)
+
+async def close_on(stop: asyncio.Event, ws) -> None:
+    await stop.wait()
+    await ws.close()
 
 
 async def heartbeat(ws, interval: float) -> None:
@@ -309,6 +378,6 @@ async def reply(token: str, callback_token: str, text: str, buttons: list) -> No
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        sys.exit(asyncio.run(main()))
     except KeyboardInterrupt:
         print("\n봇을 종료합니다.")

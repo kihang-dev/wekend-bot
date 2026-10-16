@@ -8,10 +8,16 @@
 
 ## 실행
 ```bash
-export BOT_TOKEN="봇 인증 토큰"
-uv run --python 3.12 kakao_bot.py
+cp .env.example .env      # .env 에 봇 인증 토큰 입력 (저장소에 올라가지 않음)
+./run_bot.sh              # 디버그 로그: DEBUG=1 ./run_bot.sh
 ```
-디버그 로그(`events.log`)가 필요하면 `DEBUG=1 uv run --python 3.12 kakao_bot.py`
+- 연결이 끊기면 자동 재접속, 오류로 꺼지면 5초 후 자동 재시작
+- 30초마다 GitHub를 확인해 새 커밋이 있으면 받아와서 자동 재시작
+
+## 자동 커밋·푸시 (개발 맥)
+`.env` 에 `AUTO_PUSH=1` 을 넣고 `./run_bot.sh` 로 실행하면, 봇이 30초마다 폴더 변경을 확인해
+자동으로 커밋·푸시한 뒤 새 버전으로 재시작합니다. 기록은 `auto_push.log`.
+수동 푸시: `./auto_push.sh "커밋 메시지"`
 
 ## 명령어
 | 명령어 | 설명 |
