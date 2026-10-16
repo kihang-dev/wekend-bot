@@ -1,0 +1,13 @@
+# 가상환경 / 캐시
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# 봇 실행 데이터 (개인정보·투표 기록)
+polls.json
+users.json
+events.log
+
+# 토큰 등 비밀값
+.env
