@@ -43,6 +43,7 @@ CALLBACK_URL = "https://kapi.kakao.com/v1/bot/callback"
 
 HELP_TEXT = """📖 위켄봇 사용법
 명령 앞의 ! 는 안 붙여도 돼요.
+단체방에서는 @위켄봇 참석 처럼 불러도 돼요.
 
 [처음 한 번]
 이름 홍길동
@@ -64,8 +65,8 @@ HELP_TEXT = """📖 위켄봇 사용법
   → 2번 투표에 참석·불참 (번호는 투표 만들 때 나와요)
 용병 261017 홍길동
   → 그날 투표에 용병 추가 (띄어쓰기 있으면 "홍 길동")
-멤버
-  → 지금 참석자 보기
+멤버 / 멤버 2
+  → 참석자 명단 보기 (번호 생략 시 최근 투표)
 
 [투표 관리]
 투표조회
@@ -79,8 +80,8 @@ HELP_TEXT = """📖 위켄봇 사용법
 수정 2 멤버 홍길동 김철수
   → 2번 투표에서 홍길동을 김철수로 바꾸기
   → 번호를 빼면 가장 최근 투표
-투표종료 2
-  → 2번 투표 바로 마감
+투표종료 2 (또는 투표완료 2)
+  → 마감일 전이라도 2번 투표를 바로 끝내기
 투표삭제 2
   → 2번 투표 삭제
 
@@ -422,7 +423,8 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료", "투표조회", "투표삭제", "용병"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병"}
+ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
 def parse_command(text: str) -> tuple[str, list[str]] | None:
@@ -442,15 +444,25 @@ def parse_command(text: str) -> tuple[str, list[str]] | None:
     cmd, args = words[start].lstrip("!"), words[start + 1:]
     if cmd not in COMMANDS:
         return None
-    if cmd == "투표" and args[:1] in (["종료"], ["조회"], ["삭제"]):  # "투표 종료/조회/삭제" 도 허용
+    if cmd == "투표" and args[:1] in (["종료"], ["완료"], ["조회"], ["삭제"]):  # "투표 종료/완료/조회/삭제" 도 허용
         cmd, args = "투표" + args[0], args[1:]
+        if cmd == "투표완료":
+            cmd = "투표종료"
+    cmd = ALIASES.get(cmd, cmd)
     return cmd, args
+
+
+BOT_MENTION = "@위켄"  # 단체방에서 봇을 부르는 이름 (@위켄봇, @위켄 봇 모두)
+UNKNOWN_HINT = "❓ 알 수 없는 명령이에요.\n사용법은 @위켄봇 도움말 을 입력해주세요."
 
 
 def handle(text: str, user_key: str, room: str, now: datetime | None = None) -> tuple[str, list] | None:
     """카톡 명령어를 처리하고 (답장 텍스트, 버튼 목록) 을 돌려준다. 명령어가 아니면 None."""
     parsed = parse_command(text)
     if not parsed:
+        # 봇을 불렀는데 명령을 모르면 도움말 안내 (일반 대화에는 답하지 않는다)
+        if (text or "").startswith(BOT_MENTION) and len((text or "").split()) >= 2:
+            return UNKNOWN_HINT, []
         return None
     cmd, args = parsed
     try:
@@ -507,12 +519,15 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         poll = cast_vote(room, user_key, name, SIDES[cmd], now, poll_id=pid)
         return f"{name}님 {cmd}으로 기록했어요.\n{poll_summary(poll)}", vote_buttons(poll)
 
-    if cmd == "멤버":
-        poll = get_poll(room)
+    if cmd == "멤버":  # 멤버 → 최근 투표, 멤버 2 → 2번 투표
+        if args:
+            poll = get_poll_no(room, _parse_no(args[0]))
+        else:
+            poll = get_poll(room)
         att = list(poll["attend"].values())
         status = " (마감)" if is_closed(poll, now) else ""
         body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "아직 참석자가 없어요."
-        return f"🗳 {poll['title']}{status}\n참석 {len(att)}명\n{body}", []
+        return f"🗳 {poll['no']}번 · {poll['title']}{status}\n참석 {len(att)}명\n{body}", []
 
     if cmd == "스쿼드":
         return make_squad(room), []
@@ -628,8 +643,12 @@ def make_api(api_key: str):
         desc: str = Field("", examples=["1차 회식"], description="설명 (선택)")
 
     class PollUpdate(BaseModel):
+        no: int | None = Field(None, examples=[2], description="투표 번호 (생략 시 진행중인 최근 투표)")
         date: str | None = Field(None, examples=["261024"], description="YYMMDD")
         place: str | None = Field(None, examples=["강남"])
+
+    class CloseBody(BaseModel):
+        no: int | None = Field(None, examples=[2], description="투표 번호 (생략 시 진행중인 최근 투표)")
 
     class Vote(BaseModel):
         name: str = Field(..., examples=["홍길동"])
@@ -641,6 +660,7 @@ def make_api(api_key: str):
         names: list[str] = Field(..., examples=[["홍길동", "김철수"]])
 
     class MemberChange(BaseModel):
+        no: int | None = Field(None, examples=[2], description="투표 번호 (생략 시 진행중인 최근 투표)")
         old: str = Field(..., examples=["홍길동"], description="바꿀 참석자 이름")
         new: str = Field(..., examples=["김철수"], description="새 이름")
 
@@ -651,18 +671,18 @@ def make_api(api_key: str):
     @app.get("/polls", summary="모든 카톡방의 투표 목록")
     def all_polls():
         return [
-            {"no": i, **poll_view(r, p)}
+            {"no": p["no"], **poll_view(r, p)}
             for r, lst in list_polls().items()
-            for i, p in enumerate(lst, 1)
+            for p in lst
         ]
 
     @app.get("/polls/{room}", summary="투표 상세")
     def one_poll(room: str):
         return poll_view(room, get_poll(room))
 
-    @app.get("/polls/{room}/members", summary="참석 인원 (!멤버)")
-    def members(room: str):
-        p = get_poll(room)
+    @app.get("/polls/{room}/members", summary="참석 인원 (!멤버 / !멤버 번호)")
+    def members(room: str, no: int | None = None):
+        p = get_poll(room) if no is None else get_poll_no(room, no)
         return {"title": p["title"], "count": len(p["attend"]), "members": list(p["attend"].values())}
 
     @app.post("/polls/{room}", status_code=201, summary="투표 생성 (!투표)")
@@ -673,7 +693,7 @@ def make_api(api_key: str):
     def update(room: str, body: PollUpdate):
         if body.date is None and body.place is None:
             raise PollError("date 또는 place 중 하나는 있어야 해요.")
-        return poll_view(room, update_poll(room, body.date, body.place))
+        return poll_view(room, update_poll(room, body.date, body.place, no=body.no))
 
     @app.post("/polls/{room}/votes", summary="이름으로 참석/불참 기록")
     def vote(room: str, body: Vote):
@@ -685,9 +705,9 @@ def make_api(api_key: str):
     def unvote(room: str, name: str):
         return poll_view(room, remove_vote(room, name))
 
-    @app.put("/polls/{room}/members", summary="참석 멤버 변경 (!수정 멤버 A B)")
+    @app.put("/polls/{room}/members", summary="참석 멤버 변경 (!수정 번호 멤버 A B)")
     def change_member(room: str, body: MemberChange):
-        return poll_view(room, replace_member(room, body.old, body.new))
+        return poll_view(room, replace_member(room, body.old, body.new, no=body.no))
 
     @app.post("/polls/{room}/squad", summary="스쿼드 구성 (!스쿼드)")
     def squad(room: str):
@@ -698,13 +718,13 @@ def make_api(api_key: str):
         poll, _, _ = add_mercenaries(room, body.date, body.names)
         return poll_view(room, poll)
 
-    @app.post("/polls/{room}/close", summary="지금 바로 투표 마감 (투표종료)")
-    def close(room: str):
-        return poll_view(room, close_poll(room))
+    @app.post("/polls/{room}/close", summary="지금 바로 투표 마감 (투표종료 / 투표완료)")
+    def close(room: str, body: CloseBody | None = None):
+        return poll_view(room, close_poll(room, no=body.no if body else None))
 
     @app.get("/polls/{room}/list", summary="카톡방의 투표 목록 (투표조회)")
     def room_list(room: str):
-        return [{"no": i, **poll_view(room, p)} for i, p in enumerate(room_polls(room), 1)]
+        return [{"no": p["no"], **poll_view(room, p)} for p in room_polls(room)]
 
     @app.get("/polls/{room}/{no}", summary="번호로 투표 조회 (투표조회 번호)")
     def by_no(room: str, no: int):
