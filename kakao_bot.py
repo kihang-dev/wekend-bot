@@ -23,6 +23,7 @@ REST API (.env 에 API_KEY 를 넣으면 켜짐, 문서: http://서버:8000/docs
 import asyncio
 import json
 import os
+import shlex
 import re
 import sys
 from datetime import datetime, timedelta
@@ -41,19 +42,21 @@ CALLBACK_URL = "https://kapi.kakao.com/v1/bot/callback"
 
 HELP_TEXT = """[봇 사용법] (앞에 ! 는 붙여도, 안 붙여도 돼요)
 이름 [닉네임] : 내 이름 등록 (처음 1회)
-투표 날짜 장소 : 참석/불참 투표 생성
+투표 날짜 장소 [설명] : 투표 만들기 (진행중인 투표가 있어도 추가 가능)
    예) 투표 261017 달월
+   예) 투표 261017 달월 1차 회식
+   장소가 두 단어 이상이면 따옴표: 투표 261017 "강남역 2번출구" 회식
    → 해당 날짜 다음주 수요일 23시 마감
-참석 / 불참 : 투표하기
+참석 / 불참 : 투표하기 (진행중인 가장 최근 투표)
+용병 날짜 이름 [이름2 ...] : 해당 날짜 투표에 참석자 추가
 멤버 : 참석 인원 확인
 스쿼드 : 참석 인원으로 스쿼드 구성
 수정 장소 [새 장소] : 장소 변경
 수정 날짜 [YYMMDD] : 날짜 변경
 수정 멤버 [A] [B] : 참석자 A → B 변경
-투표조회 : 투표 목록 (번호 포함)
-투표조회 [번호] : 해당 투표 상세
-투표종료 : 지금 바로 투표 마감
-투표삭제 [번호] : 해당 투표 삭제 (번호 없으면 최근 투표)"""
+투표조회 [번호] : 투표 목록, 번호를 주면 상세
+투표종료 [번호] : 지금 바로 마감 (번호 없으면 진행중인 가장 최근 투표)
+투표삭제 [번호] : 투표 삭제 (번호 없으면 가장 최근 투표)"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
 VOTE_BUTTONS = [
@@ -124,13 +127,13 @@ def load_polls() -> dict:
     return {r: (v if isinstance(v, list) else [v]) for r, v in polls.items()}
 
 
-def _require(polls: dict, room: str) -> dict:
-    """가장 최근 투표 (진행중이거나, 없으면 가장 최근에 마감된 투표)"""
+def _require(polls: dict, room: str, now: datetime | None = None) -> dict:
+    """현재 투표: 가장 최근 진행중 투표. 진행중인 투표가 없으면 가장 최근 투표(마감된 것)."""
     lst = polls.get(room) or []
-    poll = lst[-1] if lst else None
-    if not poll:
+    if not lst:
         raise PollError(NO_POLL, 404)
-    return poll
+    opened = [p for p in lst if not is_closed(p, now)]
+    return opened[-1] if opened else lst[-1]
 
 
 def _retitle(poll: dict) -> None:
@@ -161,20 +164,19 @@ def register_name(user_key: str, name: str) -> str:
     return name
 
 
-def create_poll(room: str, date_str: str, place: str, creator: str, now: datetime | None = None) -> dict:
+def create_poll(room: str, date_str: str, place: str, creator: str,
+                now: datetime | None = None, desc: str = "") -> dict:
     date = parse_date(date_str)
     if not date:
         raise PollError("날짜는 YYMMDD 형식으로 입력해주세요. 예) 261017")
     place = (place or "").strip()
     if not place:
         raise PollError("장소를 입력해주세요.")
-    polls = load_polls()
-    old = (polls.get(room) or [None])[-1]
-    if old and not is_closed(old, now):
-        raise PollError(f"이미 진행중인 투표가 있어요.\n'{old['title']}'\n먼저 투표종료 또는 삭제 후 다시 만들어주세요.", 409)
+    polls = load_polls()  # 진행중인 투표가 있어도 새 투표를 추가할 수 있다
     poll = {
         "date": date_str,
         "place": place,
+        "desc": (desc or "").strip(),
         "title": "",
         "deadline": calc_deadline(date).isoformat(),
         "attend": {},
@@ -190,7 +192,7 @@ def create_poll(room: str, date_str: str, place: str, creator: str, now: datetim
 def cast_vote(room: str, user_key: str, name: str, side: str, now: datetime | None = None) -> dict:
     """side: 'attend' | 'absent'"""
     polls = load_polls()
-    poll = _require(polls, room)
+    poll = _require(polls, room, now)
     if is_closed(poll, now):
         raise PollError(f"'{poll['title']}' 투표는 마감되었습니다.", 409)
     other = "absent" if side == "attend" else "attend"
@@ -251,10 +253,16 @@ def replace_member(room: str, a: str, b: str) -> dict:
     return poll
 
 
-def close_poll(room: str, now: datetime | None = None) -> dict:
-    """투표를 지금 바로 마감한다."""
+def close_poll(room: str, now: datetime | None = None, no: int | None = None) -> dict:
+    """투표를 지금 바로 마감한다. no 가 없으면 진행중인 가장 최근 투표."""
     polls = load_polls()
-    poll = _require(polls, room)
+    if no is None:
+        poll = _require(polls, room, now)
+    else:
+        lst = polls.get(room) or []
+        if not 1 <= no <= len(lst):
+            raise PollError(f"{no}번 투표가 없어요. 투표조회 로 번호를 확인해주세요.", 404)
+        poll = lst[no - 1]
     if is_closed(poll, now):
         raise PollError(f"'{poll['title']}' 투표는 이미 마감되었어요.", 409)
     poll["closed_at"] = (now or now_kst()).isoformat()
@@ -291,6 +299,35 @@ def delete_poll(room: str, no: int | None = None) -> str:
     return title
 
 
+def add_mercenaries(room: str, date_str: str, names: list[str],
+                    now: datetime | None = None) -> tuple[dict, list[str], list[str]]:
+    """해당 날짜 투표의 참석자 명단에 용병을 추가한다. (투표, 추가된 이름, 이미 명단에 있던 이름)"""
+    if not parse_date(date_str):
+        raise PollError("날짜는 YYMMDD 형식으로 입력해주세요. 예) 용병 261017 홍길동")
+    polls = load_polls()
+    same = [p for p in polls.get(room) or [] if p["date"] == date_str]
+    if not same:
+        raise PollError(f"{date_str} 날짜의 투표가 없어요. 투표조회 로 확인해주세요.", 404)
+    opened = [p for p in same if not is_closed(p, now)]
+    poll = (opened or same)[-1]
+    if is_closed(poll, now):
+        raise PollError(f"'{poll['title']}' 투표는 마감되어 용병을 추가할 수 없어요.", 409)
+    users = _load(USERS_FILE)
+    added, skipped = [], []
+    for name in names:
+        if name in poll["attend"].values():
+            skipped.append(name)
+            continue
+        # 등록된 사용자 이름이면 그 사람의 키를 써서, 나중에 본인이 참석해도 중복되지 않게 한다
+        key = next((k for k, n in users.items() if n == name), f"manual:{name}")
+        poll["absent"].pop(key, None)
+        poll["attend"][key] = name
+        added.append(name)
+    if added:
+        _save(POLLS_FILE, polls)
+    return poll, added, skipped
+
+
 def make_squad(room: str) -> str:
     _require(load_polls(), room)
     # TODO: 참석 인원으로 실제 스쿼드 구성 로직 추가
@@ -301,7 +338,7 @@ def make_squad(room: str) -> str:
 def poll_summary(p: dict) -> str:
     att, absn = list(p["attend"].values()), list(p["absent"].values())
     return "\n".join([
-        f"🗳 {p['title']}",
+        f"🗳 {p['title']}" + (f"\n📝 {p['desc']}" if p.get("desc") else ""),
         f"마감: {fmt_deadline(p['closed_at'] if p.get('closed_at') else p['deadline'])}"
         + (" (마감됨)" if p.get("closed_at") else ""),
         f"참석 {len(att)}명: {', '.join(att) if att else '-'}",
@@ -309,7 +346,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료", "투표조회", "투표삭제"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료", "투표조회", "투표삭제", "용병"}
 
 
 def parse_command(text: str) -> tuple[str, list[str]] | None:
@@ -365,9 +402,14 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         return f"이름을 '{name}'(으)로 등록했어요.", []
 
     if cmd == "투표":
-        if len(args) < 2:
-            return "사용법: 투표 날짜 장소\n예) 투표 261017 달월", []
-        poll = create_poll(room, args[0], " ".join(args[1:]), user_key, now)
+        try:  # 따옴표로 묶은 장소("강남역 2번출구")를 한 덩어리로 읽는다
+            tokens = shlex.split(" ".join(args))
+        except ValueError:
+            tokens = args
+        if len(tokens) < 2:
+            return ("사용법: 투표 날짜 장소 [설명]\n예) 투표 261017 달월\n예) 투표 261017 달월 1차 회식\n"
+                    "예) 투표 261017 \"강남역 2번출구\" 회식"), []
+        poll = create_poll(room, tokens[0], tokens[1], user_key, now, desc=" ".join(tokens[2:]))
         return f"투표가 생성되었습니다!\n{poll_summary(poll)}\n\n{VOTE_HINT}", VOTE_BUTTONS
 
     if cmd in SIDES:
@@ -413,8 +455,20 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return "수정할 항목은 장소 / 날짜 / 멤버 중 하나예요.", []
         return f"수정되었습니다.\n{poll_summary(poll)}", []
 
+    if cmd == "용병":
+        if len(args) < 2:
+            return "사용법: 용병 날짜 이름 [이름2 ...]\n예) 용병 261017 홍길동", []
+        poll, added, skipped = add_mercenaries(room, args[0], args[1:], now)
+        lines = []
+        if added:
+            lines.append(f"용병 {', '.join(added)}님을 '{poll['title']}' 참석자에 추가했어요.")
+        if skipped:
+            lines.append(f"이미 명단에 있어요: {', '.join(skipped)}")
+        return "\n".join(lines) + f"\n{poll_summary(poll)}", []
+
     if cmd == "투표종료":
-        poll = close_poll(room, now)
+        no = _parse_no(args[0]) if args else None
+        poll = close_poll(room, now, no)
         att = list(poll["attend"].values())
         body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "참석자 없음"
         return f"🔒 '{poll['title']}' 투표를 마감했습니다.\n\n[최종 결과]\n{poll_summary(poll)}\n\n참석 명단\n{body}", []
@@ -477,6 +531,7 @@ def make_api(api_key: str):
     class PollCreate(BaseModel):
         date: str = Field(..., examples=["261017"], description="YYMMDD")
         place: str = Field(..., examples=["달월"])
+        desc: str = Field("", examples=["1차 회식"], description="설명 (선택)")
 
     class PollUpdate(BaseModel):
         date: str | None = Field(None, examples=["261024"], description="YYMMDD")
@@ -485,6 +540,10 @@ def make_api(api_key: str):
     class Vote(BaseModel):
         name: str = Field(..., examples=["홍길동"])
         status: Literal["참석", "불참"] = "참석"
+
+    class Mercenary(BaseModel):
+        date: str = Field(..., examples=["261017"], description="YYMMDD")
+        names: list[str] = Field(..., examples=[["홍길동", "김철수"]])
 
     class MemberChange(BaseModel):
         old: str = Field(..., examples=["홍길동"], description="바꿀 참석자 이름")
@@ -513,7 +572,7 @@ def make_api(api_key: str):
 
     @app.post("/polls/{room}", status_code=201, summary="투표 생성 (!투표)")
     def create(room: str, body: PollCreate):
-        return poll_view(room, create_poll(room, body.date, body.place, creator="api"))
+        return poll_view(room, create_poll(room, body.date, body.place, "api", desc=body.desc))
 
     @app.patch("/polls/{room}", summary="날짜·장소 수정 (!수정 날짜 / !수정 장소)")
     def update(room: str, body: PollUpdate):
@@ -538,6 +597,11 @@ def make_api(api_key: str):
     @app.post("/polls/{room}/squad", summary="스쿼드 구성 (!스쿼드)")
     def squad(room: str):
         return {"result": make_squad(room)}
+
+    @app.post("/polls/{room}/mercenaries", summary="용병 추가 (용병 날짜 이름)")
+    def mercenaries(room: str, body: Mercenary):
+        poll, _, _ = add_mercenaries(room, body.date, body.names)
+        return poll_view(room, poll)
 
     @app.post("/polls/{room}/close", summary="지금 바로 투표 마감 (투표종료)")
     def close(room: str):
