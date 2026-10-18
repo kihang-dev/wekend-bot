@@ -50,7 +50,7 @@ HELP_TEXT = """[봇 사용법] (앞에 ! 는 붙여도, 안 붙여도 돼요)
    → 해당 날짜 다음주 수요일 23시 마감
 참석 / 불참 : 투표하기 (버튼을 누르면 그 투표에 기록, 직접 입력하면 진행중인 가장 최근 투표)
    직접 지정: 참석 #투표id (투표조회 에서 확인)
-용병 날짜 이름 [이름2 ...] : 해당 날짜 투표에 참석자 추가
+용병 날짜 이름 [이름2 ...] : 해당 날짜 투표에 참석자 추가 (띄어쓰기 있는 이름은 "홍 길동" 처럼 따옴표)
 멤버 : 참석 인원 확인
 스쿼드 : 참석 인원으로 스쿼드 구성
 수정 장소 [새 장소] : 장소 변경
@@ -498,9 +498,14 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         return f"수정되었습니다.\n{poll_summary(poll)}", []
 
     if cmd == "용병":
-        if len(args) < 2:
-            return "사용법: 용병 날짜 이름 [이름2 ...]\n예) 용병 261017 홍길동", []
-        poll, added, skipped = add_mercenaries(room, args[0], args[1:], now)
+        try:  # 띄어쓰기가 있는 닉네임은 따옴표로 묶는다: 용병 261017 "홍 길동" 김철수
+            tokens = shlex.split(" ".join(args))
+        except ValueError:
+            return "따옴표가 짝이 맞지 않아요. 예) 용병 261017 \"홍 길동\" 김철수", []
+        if len(tokens) < 2:
+            return ("사용법: 용병 날짜 이름 [이름2 ...]\n예) 용병 261017 홍길동\n"
+                    "예) 용병 261017 \"홍 길동\" 김철수"), []
+        poll, added, skipped = add_mercenaries(room, tokens[0], tokens[1:], now)
         lines = []
         if added:
             lines.append(f"용병 {', '.join(added)}님을 '{poll['title']}' 참석자에 추가했어요.")
