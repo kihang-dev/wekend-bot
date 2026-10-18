@@ -34,6 +34,17 @@ from zoneinfo import ZoneInfo
 KST = ZoneInfo("Asia/Seoul")
 HERE = Path(__file__).parent
 POLLS_FILE = HERE / "polls.json"
+SCHEDULE_FILE = HERE / "schedule.json"  # 자동 투표를 이미 만든 날짜 기록 (재시작해도 중복 방지)
+
+# 매주 토요일 10시에 자동으로 올리는 정기 투표 (날짜는 만드는 날로부터 다음 주 토요일)
+WEEKLY_POLL = {
+    "room": "bg2_FC9qCJH80EDJfn1F70GC9tlYzcxlnA23bQ",
+    "place": "달월",
+    "desc": "정기풋살",
+    "weekday": 6,  # 일요일 (월=0) — 테스트용. 실제 운영은 5(토요일)
+    "hour": 22,    # 테스트용. 실제 운영은 10
+    "minute": 32,  # 테스트용. 실제 운영은 0
+}
 USERS_FILE = HERE / "users.json"
 LOG_FILE = HERE / "events.log"
 DEBUG = os.environ.get("DEBUG") == "1"
@@ -42,50 +53,48 @@ GW_URL = "wss://bot-gateway.kakao.com/gateway"
 CALLBACK_URL = "https://kapi.kakao.com/v1/bot/callback"
 
 HELP_TEXT = """📖 위켄봇 사용법
-명령 앞의 ! 는 안 붙여도 돼요.
-단체방에서는 @위켄봇 참석 처럼 불러도 돼요.
 
 [처음 한 번]
-이름 홍길동
+@위켄봇 이름 홍길동
   → 내 이름 등록
 
 [투표 만들기]
-투표 261017 달월
+@위켄봇 투표 261017 달월
   → 2026년 10월 17일 달월 투표 (날짜는 년월일 6자리)
-투표 261017 달월 1차 회식
+@위켄봇 투표 261017 달월 정기풋살
   → 설명도 함께 적기 (생략 가능)
-투표 261017 "강남역 2번출구"
+@위켄봇 투표 261017 "강남역 2번출구"
   → 장소가 두 단어 이상이면 따옴표로 묶기
   → 마감은 다음 주 수요일 밤 11시
 
 [참석하기]
-참석 / 불참
+@위켄봇 참석 / @위켄봇 불참
   → 가장 최근 투표에 참석·불참
-참석 2 / 불참 2
+@위켄봇 참석 2 / @위켄봇 불참 2
   → 2번 투표에 참석·불참 (번호는 투표 만들 때 나와요)
-용병 261017 홍길동
+@위켄봇 용병 261017 홍길동
   → 그날 투표에 용병 추가 (띄어쓰기 있으면 "홍 길동")
-멤버 / 멤버 2
+@위켄봇 멤버 / @위켄봇 멤버 2
   → 참석자 명단 보기 (번호 생략 시 최근 투표)
 
 [투표 관리]
-투표조회
+@위켄봇 투표조회
   → 투표 목록 보기
-투표조회 2
+@위켄봇 투표조회 2
   → 2번 투표 자세히 보기
-수정 2 장소 강남역
+@위켄봇 수정 2 장소 강남역
   → 2번 투표 장소 바꾸기
-수정 2 날짜 261024
+@위켄봇 수정 2 날짜 261024
   → 2번 투표 날짜 바꾸기
-수정 2 멤버 홍길동 김철수
+@위켄봇 수정 2 멤버 홍길동 김철수
   → 2번 투표에서 홍길동을 김철수로 바꾸기
   → 번호를 빼면 가장 최근 투표
-투표종료 2 (또는 투표완료 2)
+@위켄봇 투표종료 2 (또는 투표완료 2)
   → 마감일 전이라도 2번 투표를 바로 끝내기
-투표삭제 2
+@위켄봇 투표삭제 2
   → 2번 투표 삭제
 
-스쿼드
+@위켄봇 스쿼드
   → 스쿼드 구성 페이지 열기"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
@@ -808,6 +817,43 @@ async def watch_updates(start_head: str, stop: asyncio.Event) -> None:
             stop.set()
 
 
+def make_weekly_poll(now: datetime) -> dict | None:
+    """토요일 10시대에 정기 투표를 한 번만 만든다. 만들었으면 그 투표, 아니면 None."""
+    cfg = WEEKLY_POLL
+    if now.weekday() != cfg["weekday"] or now.hour != cfg["hour"] or now.minute != cfg["minute"]:
+        return None
+    today = now.date().isoformat()
+    marks = _load(SCHEDULE_FILE)
+    if marks.get("weekly") == today:  # 오늘 이미 만듦
+        return None
+    # 다음 주 토요일: 오늘 이후 가장 가까운 토요일 (토요일에 만들면 +7일, 일요일에 만들면 +6일)
+    ahead = (5 - now.weekday()) % 7 or 7
+    poll_date = (now.date() + timedelta(days=ahead)).strftime("%y%m%d")
+    polls = load_polls()
+    if any(p["date"] == poll_date for p in polls.get(cfg["room"]) or []):
+        marks["weekly"] = today
+        _save(SCHEDULE_FILE, marks)
+        return None
+    poll = create_poll(cfg["room"], poll_date, cfg["place"], "auto", now, desc=cfg["desc"])
+    marks["weekly"] = today
+    _save(SCHEDULE_FILE, marks)
+    print(f"정기 투표 생성: {poll['title']} #{poll['no']}")
+    return poll
+
+
+async def weekly_poll_loop(stop: asyncio.Event) -> None:
+    """30초마다 시간을 확인해서 정기 투표를 만든다 (1분에 최소 두 번 확인하므로 놓치지 않는다)."""
+    while not stop.is_set():
+        try:
+            make_weekly_poll(now_kst())
+        except Exception as e:
+            print("정기 투표 오류:", repr(e))
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            pass
+
+
 async def main() -> int:
     import websockets
 
@@ -821,6 +867,7 @@ async def main() -> int:
     if start_head:
         asyncio.create_task(watch_updates(start_head, stop))
     api_task = asyncio.create_task(serve_api(stop))
+    weekly_task = asyncio.create_task(weekly_poll_loop(stop))
 
     retry = 1
     while not stop.is_set():
@@ -834,6 +881,7 @@ async def main() -> int:
             await asyncio.sleep(retry)
             retry = min(retry * 2, 60)
     await api_task
+    await weekly_task
     return UPDATE_EXIT_CODE
 
 
