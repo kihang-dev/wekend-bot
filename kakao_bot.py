@@ -43,7 +43,7 @@ WEEKLY_POLL = {
     "desc": "정기풋살",
     "weekday": 6,  # 일요일 (월=0) — 테스트용. 실제 운영은 5(토요일)
     "hour": 22,    # 테스트용. 실제 운영은 10
-    "minute": 38,  # 테스트용. 실제 운영은 0
+    "minute": 46,  # 테스트용. 실제 운영은 0
 }
 USERS_FILE = HERE / "users.json"
 LOG_FILE = HERE / "events.log"
@@ -497,6 +497,13 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return f"사용법: 이름 [닉네임]\n현재 등록된 이름: {current}", []
         name = register_name(user_key, " ".join(args))
         return f"이름을 '{name}'(으)로 등록했어요.", []
+
+    if cmd == "투표" and not args:  # "@위켄봇 투표" → 진행중인 최근 투표 카드 (버튼으로 참석·불참)
+        opened = [p for p in room_polls(room) if not is_closed(p, now)]
+        if not opened:
+            raise PollError("진행중인 투표가 없어요.\n새로 만들려면: @위켄봇 투표 261017 달월")
+        poll = opened[-1]
+        return f"{poll_summary(poll)}\n\n{VOTE_HINT}", vote_buttons(poll)
 
     if cmd == "투표":
         try:  # 따옴표로 묶은 장소("강남역 2번출구")를 한 덩어리로 읽는다
