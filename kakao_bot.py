@@ -43,7 +43,7 @@ WEEKLY_POLL = {
     "desc": "정기풋살",
     "weekday": 6,  # 일요일 (월=0) — 테스트용. 실제 운영은 5(토요일)
     "hour": 22,    # 테스트용. 실제 운영은 10
-    "minute": 32,  # 테스트용. 실제 운영은 0
+    "minute": 35,  # 테스트용. 실제 운영은 0
 }
 USERS_FILE = HERE / "users.json"
 LOG_FILE = HERE / "events.log"
