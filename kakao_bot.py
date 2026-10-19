@@ -79,7 +79,8 @@ HELP_TEXT = """📖 위켄봇 사용법
 [스쿼드]
 · 스쿼드 — 스쿼드 페이지 링크
 · 스쿼드만들기 — 참석자로 팀을 새로 짜서 페이지에 반영
-· 명단 — 전체 명단 보기"""
+· 명단 — 전체 명단 보기
+· 포지션 김기항 ST/LB — 선호 포지션 바꾸기 (GitHub 반영)"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
 def vote_buttons(poll: dict) -> list[dict]:
@@ -474,6 +475,40 @@ def roster_text() -> str:
     return f"👥 전체 명단 ({len(names)}명)\n(이름 · 등급 · 포지션 1순위/2순위)\n" + "\n".join(lines)
 
 
+POSITION_CODES = {"ST", "CM", "RB", "LB", "CB"}
+
+
+def set_player_position(name: str, first: str, second: str) -> str:
+    """선호 포지션을 positions.py 에 덮어쓰고 GitHub 에 커밋·푸시한다. 없던 선수는 새로 추가한다."""
+    import re
+    import subprocess
+    path = SQUAD_REPO / "positions.py"
+    if not path.exists():
+        raise PollError(f"명단 파일을 찾을 수 없어요: {path}", 500)
+    with SQUAD_LOCK:
+        pull_squad()
+        text = path.read_text(encoding="utf-8")
+        line = f'    "{name}":  ("{first}", "{second}"),   # 1순위: {first}  / 2순위: {second}'
+        pattern = re.compile(rf'^[ \t]*"{re.escape(name)}":.*$', re.M)
+        if pattern.search(text):
+            text = pattern.sub(line, text, count=1)  # 기존 선수: 줄만 교체
+        else:
+            text = re.sub(r'\n\}\s*\n', f'\n{line}\n}}\n', text, count=1)  # 새 선수: 딕셔너리 끝에 추가
+        path.write_text(text, encoding="utf-8")
+
+        def run(*args):
+            return subprocess.run(["git", *args], cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
+
+        run("add", "positions.py")
+        r = run("commit", "-m", f"선호 포지션 변경: {name} {first}/{second}")
+        if r.returncode != 0 and "nothing to commit" not in (r.stdout + r.stderr):
+            raise PollError(f"커밋 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
+        r = run("push", "origin", "HEAD")
+        if r.returncode != 0:
+            raise PollError(f"GitHub 푸시 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
+    return f"✅ {name} 선호 포지션을 {first}/{second}(으)로 바꾸고 GitHub에 올렸어요."
+
+
 def make_squad(room: str) -> str:
     """스쿼드 구성은 외부 페이지에서 한다. 봇은 그 링크를 안내한다."""
     return f"스쿼드 구성 페이지\n{SQUAD_URL}"
@@ -638,7 +673,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -762,6 +797,16 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         att = list(poll["attend"].values())
         body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "참석자가 없어요."
         return f"🗳 {poll['no']}번 · {poll['title']} (마감)\n참석 {len(att)}명\n{body}", []
+
+    if cmd == "포지션":  # 포지션 김기항 ST/LB → 선호 포지션을 덮어쓴다
+        usage = "사용법: 포지션 이름 1순위/2순위\n예) 포지션 김기항 ST/LB\n(포지션: ST, CM, RB, LB, CB)"
+        if len(args) < 2:
+            return usage, []
+        name, combo = " ".join(args[:-1]), args[-1].upper()
+        parts = combo.split("/")
+        if len(parts) != 2 or any(p not in POSITION_CODES for p in parts):
+            return usage, []
+        return set_player_position(name, parts[0], parts[1]), []
 
     if cmd == "명단":  # weekenders-futsal 의 전체 명단
         return roster_text(), []
