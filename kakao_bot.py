@@ -229,6 +229,8 @@ def register_name(user_key: str, name: str) -> str:
     if not name:
         raise PollError("이름을 입력해주세요.")
     users = _load(USERS_FILE)
+    if any(n == name and k != user_key for k, n in users.items()):  # 동명이인 등록 불가
+        raise PollError(f"'{name}' 이름은 이미 다른 사람이 쓰고 있어요. 다른 이름을 입력해주세요.", 409)
     users[user_key] = name
     _save(USERS_FILE, users)
     polls = load_polls()  # 이미 투표했다면 명단의 이름도 갱신
@@ -661,9 +663,19 @@ def _parse_no(s: str) -> int:
     return int(s)
 
 
+ALLOWED_NAMES = {"김민규", "이성학", "김기항"}  # 명령어를 쓸 수 있는 닉네임 (이름 등록은 누구나)
+OPEN_COMMANDS = {"이름"}  # 이름 등록만 누구나 쓸 수 있다
+
+
 def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime | None) -> tuple[str, list]:
     if cmd == "도움말":
         return HELP_TEXT, []
+    if cmd not in OPEN_COMMANDS:
+        my_name = _load(USERS_FILE).get(user_key)
+        if not my_name:
+            return "먼저 '@위켄봇 이름 [닉네임]'으로 이름을 등록해 주세요.", []
+        if my_name not in ALLOWED_NAMES:
+            return "이 명령은 지정된 멤버만 쓸 수 있어요.", []
 
     if cmd == "이름":
         if not args:
