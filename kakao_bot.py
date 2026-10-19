@@ -1096,6 +1096,7 @@ async def main() -> int:
 
     start_head = git("rev-parse", "HEAD")
     fix_open_deadlines(now_kst())  # 생성일 기준 마감 (진행중 투표 한 번 보정)
+    pull_squad()  # 봇을 켤 때마다 스쿼드 레포를 최신으로
     print(f"봇 시작 (버전 {start_head[:7] or '알수없음'})")
     stop = asyncio.Event()
     if start_head:
