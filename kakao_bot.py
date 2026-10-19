@@ -78,7 +78,8 @@ HELP_TEXT = """📖 위켄봇 사용법
 
 [스쿼드]
 · 스쿼드 — 스쿼드 페이지 링크
-· 스쿼드만들기 — 참석자로 팀을 새로 짜서 페이지에 반영"""
+· 스쿼드만들기 — 참석자로 팀을 새로 짜서 페이지에 반영
+· 명단 — 전체 명단 보기"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
 def vote_buttons(poll: dict) -> list[dict]:
@@ -444,6 +445,21 @@ SQUAD_PUBLISH_DIR = Path(os.environ.get("SQUAD_PUBLISH_DIR", "/var/www/squad"))
 SQUAD_REPO = Path(os.environ.get("SQUAD_REPO", str(Path.home() / "weekenders-futsal")))
 
 
+def roster_text() -> str:
+    """weekenders-futsal 의 전체 명단 (positions.py 의 선수 목록). 조회 전에 레포를 최신으로 받는다."""
+    import importlib.util
+    pull_squad()
+    path = SQUAD_REPO / "positions.py"
+    if not path.exists():
+        raise PollError(f"명단 파일을 찾을 수 없어요: {path}", 500)
+    spec = importlib.util.spec_from_file_location("squad_positions", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    players = list(mod.PLAYER_POSITIONS.keys())
+    body = "\n".join(f"{i}. {n}" for i, n in enumerate(players, 1))
+    return f"👥 전체 명단 ({len(players)}명)\n{body}"
+
+
 def make_squad(room: str) -> str:
     """스쿼드 구성은 외부 페이지에서 한다. 봇은 그 링크를 안내한다."""
     return f"스쿼드 구성 페이지\n{SQUAD_URL}"
@@ -608,7 +624,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -732,6 +748,9 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         att = list(poll["attend"].values())
         body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "참석자가 없어요."
         return f"🗳 {poll['no']}번 · {poll['title']} (마감)\n참석 {len(att)}명\n{body}", []
+
+    if cmd == "명단":  # weekenders-futsal 의 전체 명단
+        return roster_text(), []
 
     if cmd == "스쿼드":  # 스쿼드 페이지 주소만 안내
         return make_squad(room), []
