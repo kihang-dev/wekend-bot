@@ -100,6 +100,10 @@ HELP_TEXT = """📖 위켄봇 사용법
   → 마감일 전이라도 2번 투표를 바로 끝내기
 @위켄봇 투표삭제 2
   → 2번 투표 삭제
+@위켄봇 변경 홍길동 불참
+  → 가장 최근 투표에서 홍길동을 불참으로 (마감 후에도 가능)
+@위켄봇 변경 홍길동 참석
+  → 가장 최근 투표에서 홍길동을 참석으로
 
 @위켄봇 스쿼드
   → 스쿼드 구성 페이지 열기
@@ -307,6 +311,25 @@ def cast_vote(room: str, user_key: str, name: str, side: str,
     other = "absent" if side == "attend" else "attend"
     poll[other].pop(user_key, None)
     poll[side][user_key] = name
+    _save(POLLS_FILE, polls)
+    return poll
+
+
+def set_attendance(room: str, name: str, side: str) -> dict:
+    """가장 최근 투표에서 이름의 참석/불참을 바꾼다. 마감 후에도 가능하다. 명단에 없으면 새로 넣는다."""
+    polls = load_polls()
+    lst = polls.get(room) or []
+    if not lst:
+        raise PollError(NO_POLL, 404)
+    poll = lst[-1]
+    other = "absent" if side == "attend" else "attend"
+    key = (next((k for k, n in poll["attend"].items() if n == name), None)
+           or next((k for k, n in poll["absent"].items() if n == name), None))
+    if key is None:
+        users = _load(USERS_FILE)
+        key = next((k for k, n in users.items() if n == name), f"manual:{name}")
+    poll[other].pop(key, None)
+    poll[side][key] = name
     _save(POLLS_FILE, polls)
     return poll
 
@@ -586,7 +609,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "변경"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -762,18 +785,29 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             lines.append(f"이미 명단에 있어요: {', '.join(skipped)}")
         return "\n".join(lines) + f"\n{poll_summary(poll)}", []
 
+    if cmd == "변경":  # 변경 홍길동 불참 → 가장 최근 투표에서 이름의 참석/불참을 바꾼다 (마감 후에도 가능)
+        try:
+            tokens = shlex.split(" ".join(args))
+        except ValueError:
+            return "따옴표가 짝이 맞지 않아요. 예) 변경 \"홍 길동\" 불참", []
+        if len(tokens) < 2 or tokens[-1] not in ("참석", "불참"):
+            return "사용법: 변경 이름 참석/불참\n예) 변경 홍길동 불참", []
+        name, label = " ".join(tokens[:-1]), tokens[-1]
+        poll = set_attendance(room, name, SIDES[label])
+        return f"{name}님을 {label}으로 변경했어요.\n{poll_summary(poll)}", []
+
     if cmd == "투표종료":
         no = _parse_no(args[0]) if args else None
         poll = close_poll(room, now, no)
         att = list(poll["attend"].values())
-        body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "참석자 없음"
-        squad_line = ""
-        started = mark_squad_started(poll["id"], now or now_kst())
-        if started:  # 마감과 동시에 팀 구성 시작
-            start_squad(started)
-            squad_line = f"\n\n⚽ 팀 구성을 시작했어요. 잠시 후 👉 {SQUAD_URL}"
-        return (f"🔒 '{poll['title']}' 투표를 마감했습니다.\n\n[최종 결과]\n{poll_summary(poll)}"
-                f"\n\n참석 명단\n{body}{squad_line}"), []
+        # 카드 설명은 400자까지만 보이므로 짧게 쓴다. 버튼을 누르면 '@위켄봇 스쿼드'가 입력된다.
+        text = (f"🔒 '{poll['title']}' 투표를 마감했습니다.\n"
+                f"참석 {len(att)}명: {', '.join(att) if att else '-'}")
+        if not att:
+            return text, []
+        text += "\n\n⚽ 아래 버튼을 눌러 스쿼드를 만드세요."
+        btn = [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 스쿼드"}]
+        return text, btn
 
     if cmd == "투표조회":
         if args:  # 투표조회 2 → 2번 투표 상세
