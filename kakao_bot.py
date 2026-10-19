@@ -733,14 +733,15 @@ OPEN_COMMANDS = {"이름", "참석", "불참"}  # 이름 등록과 참석/불참
 
 
 def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime | None) -> tuple[str, list]:
-    if cmd == "도움말":
-        return HELP_TEXT, []
-    if cmd not in OPEN_COMMANDS:
+    if cmd not in OPEN_COMMANDS:  # 이름·참석·불참 외에는 지정된 멤버만 쓸 수 있다 (도움말 포함)
         my_name = _load(USERS_FILE).get(user_key)
         if not my_name:
             return "먼저 '@위켄봇 이름 [닉네임]'으로 이름을 등록해 주세요.", []
         if my_name not in ALLOWED_NAMES:
             return "이 명령은 지정된 멤버만 쓸 수 있어요.", []
+
+    if cmd == "도움말":
+        return HELP_TEXT, []
 
     if cmd == "이름":
         if not args:
