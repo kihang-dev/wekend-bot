@@ -27,6 +27,7 @@ import secrets
 import shlex
 import re
 import sys
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -38,12 +39,13 @@ SCHEDULE_FILE = HERE / "schedule.json"  # 자동 투표를 이미 만든 날짜 
 
 # 매주 토요일 10시에 자동으로 올리는 정기 투표 (날짜는 만드는 날로부터 다음 주 토요일)
 WEEKLY_POLL = {
-    "room": "bg2_FC9qCJH80EDJfn1F70GC9tlYzcxlnA23bQ",
+    "room": "bg2_YWwZGRLkPjp4l8ugIkYR8_tJG-zvoVAOew",
     "place": "달월",
     "desc": "정기풋살",
-    "weekday": 6,  # 일요일 (월=0) — 테스트용. 실제 운영은 5(토요일)
-    "hour": 22,    # 테스트용. 실제 운영은 10
-    "minute": 46,  # 테스트용. 실제 운영은 0
+    "weekday": 5,  # 토요일 (월=0)
+    "hour": 10,    # 오전 10시
+    "minute": 0,
+
 }
 USERS_FILE = HERE / "users.json"
 LOG_FILE = HERE / "events.log"
@@ -58,9 +60,14 @@ HELP_TEXT = """📖 위켄봇 사용법
 @위켄봇 이름 홍길동
   → 내 이름 등록
 
+[투표 보기]
+@위켄봇 투표
+  → 진행중인 투표를 참석·불참 버튼과 함께 보기
+
 [투표 만들기]
 @위켄봇 투표 261017 달월
   → 2026년 10월 17일 달월 투표 (날짜는 년월일 6자리)
+  → 진행중인 투표가 있으면 새로 만들 수 없어요
 @위켄봇 투표 261017 달월 정기풋살
   → 설명도 함께 적기 (생략 가능)
 @위켄봇 투표 261017 "강남역 2번출구"
@@ -75,7 +82,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 @위켄봇 용병 261017 홍길동
   → 그날 투표에 용병 추가 (띄어쓰기 있으면 "홍 길동")
 @위켄봇 멤버 / @위켄봇 멤버 2
-  → 참석자 명단 보기 (번호 생략 시 최근 투표)
+  → 마감 후 참석자 명단 보기 (번호 생략 시 최근 투표)
 
 [투표 관리]
 @위켄봇 투표조회
@@ -95,7 +102,14 @@ HELP_TEXT = """📖 위켄봇 사용법
   → 2번 투표 삭제
 
 @위켄봇 스쿼드
-  → 스쿼드 구성 페이지 열기"""
+  → 스쿼드 구성 페이지 열기
+
+@위켄봇 팀짜기
+  → 최근 투표 참석자로 팀 짜기
+@위켄봇 팀짜기 2
+  → 2번 투표로 팀 짜기
+@위켄봇 팀짜기 매칭 / 자체
+  → 외부 매칭 / 자체전 모드 지정"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
 def vote_buttons(poll: dict) -> list[dict]:
@@ -250,6 +264,10 @@ def register_name(user_key: str, name: str) -> str:
     return name
 
 
+def has_open_poll(polls: dict, room: str, now: datetime | None = None) -> bool:
+    return any(not is_closed(p, now) for p in polls.get(room) or [])
+
+
 def create_poll(room: str, date_str: str, place: str, creator: str,
                 now: datetime | None = None, desc: str = "") -> dict:
     date = parse_date(date_str)
@@ -258,7 +276,9 @@ def create_poll(room: str, date_str: str, place: str, creator: str,
     place = (place or "").strip()
     if not place:
         raise PollError("장소를 입력해주세요.")
-    polls = load_polls()  # 진행중인 투표가 있어도 새 투표를 추가할 수 있다
+    polls = load_polls()
+    if has_open_poll(polls, room, now):  # 진행중인 투표가 하나라도 있으면 새로 만들지 않는다
+        raise PollError("진행중인 투표가 있어요. 먼저 투표를 마감(투표종료)하거나 삭제한 뒤 만들어 주세요.", 409)
     poll = {
         "date": date_str,
         "place": place,
@@ -412,12 +432,146 @@ def add_mercenaries(room: str, date_str: str, names: list[str],
     return poll, added, skipped
 
 
-SQUAD_URL = "https://devminkyu.github.io/weekenders-futsal/"
+SQUAD_URL = "http://136.111.179.34/"  # 이 VM의 nginx 가 /var/www/squad 를 보여 준다
+SQUAD_PUBLISH_DIR = Path(os.environ.get("SQUAD_PUBLISH_DIR", "/var/www/squad"))
+# 스쿼드 레포 경로 (팀짜기 결과 index.html 을 push 할 로컬 clone)
+SQUAD_REPO = Path(os.environ.get("SQUAD_REPO", str(Path.home() / "weekenders-futsal")))
 
 
 def make_squad(room: str) -> str:
     """스쿼드 구성은 외부 페이지에서 한다. 봇은 그 링크를 안내한다."""
     return f"스쿼드 구성 페이지\n{SQUAD_URL}"
+
+
+def build_squad_html(members: list[str], game_mode: str = "auto") -> None:
+    """weekenders-futsal 레포의 export_html.generate_html 로 index.html 생성."""
+    import importlib.util
+
+    export_path = SQUAD_REPO / "export_html.py"
+    if not export_path.exists():
+        raise PollError(f"스쿼드 레포를 찾을 수 없어요: {SQUAD_REPO}", 500)
+
+    # export_html.py 를 동적 로드 (team_maker/grades/positions 등 같은 폴더에서 import 됨)
+    spec = importlib.util.spec_from_file_location("squad_export", export_path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SQUAD_REPO))  # team_maker 등 import 가능하게
+    spec.loader.exec_module(mod)
+    mod.generate_html(players=members, game_mode=game_mode, open_browser=False)
+
+
+def push_squad(commit_msg: str) -> bool:
+    """weekenders-futsal 레포에 index.html 커밋·push. 성공하면 True."""
+    import subprocess
+
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=SQUAD_REPO,
+                              capture_output=True, text=True, timeout=60)
+
+    run("pull", "--rebase", "origin", "HEAD")  # push 충돌 방지: 먼저 최신으로
+    run("add", "index.html")
+    if not run("status", "--porcelain").stdout.strip():
+        return True  # 변경 없음
+    r = run("commit", "-m", commit_msg)
+    if r.returncode != 0:
+        print("squad commit 실패:", r.stderr)
+        return False
+    r = run("push", "origin", "HEAD")
+    if r.returncode != 0:
+        print("squad push 실패:", r.stderr)
+        return False
+    return True
+
+
+def pull_squad() -> None:
+    """팀배정 로직 최신화: export_html 호출 전에 weekenders-futsal 을 pull."""
+    import subprocess
+    try:
+        subprocess.run(["git", "pull", "--ff-only", "origin", "HEAD"],
+                       cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print("squad pull 경고 (무시하고 진행):", repr(e))
+
+
+SQUAD_LOCK = threading.Lock()  # 팀 구성은 한 번에 하나씩
+
+
+def publish_squad() -> bool:
+    """만든 index.html 을 웹 서버 폴더로 복사한다 (GitHub push 없음). 성공하면 True."""
+    import shutil
+    try:
+        SQUAD_PUBLISH_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = SQUAD_PUBLISH_DIR / "index.html.tmp"
+        shutil.copyfile(SQUAD_REPO / "index.html", tmp)
+        tmp.replace(SQUAD_PUBLISH_DIR / "index.html")  # 복사 도중 페이지가 깨지지 않도록 교체
+        return True
+    except OSError as e:
+        print("squad 복사 실패:", repr(e))
+        return False
+
+
+def _squad_job(title: str, members: list[str], game_mode: str) -> None:
+    if not members:
+        print(f"팀짜기 {title}: 참석자가 없어 건너뜀")
+        return
+    with SQUAD_LOCK:
+        try:
+            pull_squad()
+            build_squad_html(members, game_mode)
+            ok = publish_squad()
+            print(f"팀짜기 {title}: {'완료' if ok else '실패'}")
+        except Exception as e:
+            print(f"팀짜기 {title} 오류:", repr(e))
+
+
+def start_squad(poll: dict, game_mode: str = "auto") -> None:
+    """팀 구성을 백그라운드에서 시작한다 (봇 응답이 멈추지 않도록)."""
+    members = list(poll["attend"].values())
+    threading.Thread(target=_squad_job, args=(poll["title"], members, game_mode), daemon=True).start()
+
+
+def mark_squad_started(poll_id: str, now: datetime) -> dict | None:
+    """이 투표의 팀 구성을 아직 안 했다면 표시하고 그 투표를 돌려준다 (중복 방지)."""
+    polls = load_polls()
+    for lst in polls.values():
+        for p in lst:
+            if p.get("id") == poll_id:
+                if p.get("squad_at"):
+                    return None
+                p["squad_at"] = now.isoformat()
+                _save(POLLS_FILE, polls)
+                return p
+    return None
+
+
+def close_due_polls(now: datetime) -> int:
+    """마감 시각이 막 지난(10분 이내) 투표를 마감 처리하고 팀을 짠다. 예전 투표는 건드리지 않는다."""
+    polls = load_polls()
+    started = []
+    for lst in polls.values():
+        for p in lst:
+            if p.get("closed_at") or p.get("squad_at"):
+                continue
+            passed = now - datetime.fromisoformat(p["deadline"])
+            if timedelta(0) <= passed < timedelta(minutes=10):
+                p["closed_at"] = p["deadline"]
+                p["squad_at"] = now.isoformat()
+                started.append(p)
+    if started:
+        _save(POLLS_FILE, polls)
+        for p in started:
+            start_squad(p)
+    return len(started)
+
+
+def make_team(room: str, no: int | None = None, game_mode: str = "auto") -> str:
+    """수동 팀짜기: 최근(또는 지정) 투표 참석자로 팀을 짠다. 결과는 잠시 뒤 링크에 반영된다."""
+    poll = get_poll(room) if no is None else get_poll_no(room, no)
+    members = list(poll["attend"].values())
+    if not members:
+        raise PollError("참석자가 없어요. 참석 투표부터 받아주세요.")
+    start_squad(poll, game_mode)
+    return (f"⚽ 팀 구성을 시작했어요. ({poll['title']}, {len(members)}명)\n"
+            f"👉 {SQUAD_URL}\n(바로 반영됩니다)")
 
 
 # ============================ 카톡 명령 처리 ============================
@@ -432,7 +586,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -540,13 +694,30 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             poll = get_poll_no(room, _parse_no(args[0]))
         else:
             poll = get_poll(room)
+        if not is_closed(poll, now):  # 진행중에는 명단을 보여주지 않는다 (마감 또는 투표완료 후에만)
+            return (f"🗳 {poll['no']}번 · {poll['title']}\n"
+                    "아직 투표가 진행중이에요. 마감 후 또는 투표완료 후에 멤버를 볼 수 있어요."), []
         att = list(poll["attend"].values())
-        status = " (마감)" if is_closed(poll, now) else ""
-        body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "아직 참석자가 없어요."
-        return f"🗳 {poll['no']}번 · {poll['title']}{status}\n참석 {len(att)}명\n{body}", []
+        body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "참석자가 없어요."
+        return f"🗳 {poll['no']}번 · {poll['title']} (마감)\n참석 {len(att)}명\n{body}", []
 
     if cmd == "스쿼드":
         return make_squad(room), []
+
+    if cmd == "팀짜기":
+        # 팀짜기 → 최근 투표 참석자로 자동 모드 / 팀짜기 2 → 2번 투표
+        # 팀짜기 매칭 / 자체 → 모드 지정 (매칭=외부 상대, 자체=자체전)
+        no = None
+        game_mode = "auto"
+        for a in args:
+            t = a.lstrip("#").rstrip("번")
+            if t.isdigit():
+                no = int(t)
+            elif a in ("매칭", "외부"):
+                game_mode = "match"
+            elif a in ("자체", "자체전"):
+                game_mode = "self"
+        return make_team(room, no, game_mode), []
 
     if cmd == "수정":
         usage = ("사용법: 수정 [번호] 장소 [새 장소] / 수정 [번호] 날짜 [YYMMDD] / 수정 [번호] 멤버 [A] [B]\n"
@@ -596,7 +767,13 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         poll = close_poll(room, now, no)
         att = list(poll["attend"].values())
         body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "참석자 없음"
-        return f"🔒 '{poll['title']}' 투표를 마감했습니다.\n\n[최종 결과]\n{poll_summary(poll)}\n\n참석 명단\n{body}", []
+        squad_line = ""
+        started = mark_squad_started(poll["id"], now or now_kst())
+        if started:  # 마감과 동시에 팀 구성 시작
+            start_squad(started)
+            squad_line = f"\n\n⚽ 팀 구성을 시작했어요. 잠시 후 👉 {SQUAD_URL}"
+        return (f"🔒 '{poll['title']}' 투표를 마감했습니다.\n\n[최종 결과]\n{poll_summary(poll)}"
+                f"\n\n참석 명단\n{body}{squad_line}"), []
 
     if cmd == "투표조회":
         if args:  # 투표조회 2 → 2번 투표 상세
@@ -841,6 +1018,8 @@ def make_weekly_poll(now: datetime) -> dict | None:
         marks["weekly"] = today
         _save(SCHEDULE_FILE, marks)
         return None
+    if has_open_poll(polls, cfg["room"], now):  # 진행중인 투표가 있으면 이번 주는 건너뛴다
+        return None
     poll = create_poll(cfg["room"], poll_date, cfg["place"], "auto", now, desc=cfg["desc"])
     marks["weekly"] = today
     _save(SCHEDULE_FILE, marks)
@@ -855,6 +1034,10 @@ async def weekly_poll_loop(stop: asyncio.Event) -> None:
             make_weekly_poll(now_kst())
         except Exception as e:
             print("정기 투표 오류:", repr(e))
+        try:
+            close_due_polls(now_kst())  # 마감 시각이 지나면 자동 마감 + 팀 구성
+        except Exception as e:
+            print("자동 마감 오류:", repr(e))
         try:
             await asyncio.wait_for(stop.wait(), timeout=30)
         except asyncio.TimeoutError:
@@ -914,7 +1097,8 @@ async def run_gateway(websockets, token: str, stop: asyncio.Event) -> None:
                 content = d.get("content", "")
                 print(f"RECV {user_key[-6:]}: {content}")
                 try:
-                    result = handle(content, user_key, room)
+                    # 팀짜기처럼 오래 걸리는 작업(git push 등)이 연결 유지를 막지 않도록 별도 스레드에서 처리
+                    result = await asyncio.to_thread(handle, content, user_key, room)
                 except Exception as e:  # 명령 처리 오류가 봇 전체를 멈추지 않도록
                     print("ERROR:", repr(e))
                     result = ("처리 중 오류가 발생했어요.", [])
