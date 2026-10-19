@@ -64,14 +64,14 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 투표 — 진행중인 투표 보기
 · 참석 / 불참 — 최근 투표에 응답
 · 용병 홍길동 — 최근 투표에 용병 추가 (마감 후에도 가능)
-· 멤버 — 마감 후 참석자 명단
+· 멤버 — 최근 투표 참석 멤버 보기 (마감 후)
 ※ 마감: 다음 주 수요일 23:00
 
 [관리]
-· 수정 홍길동 불참 — 참석·불참 바꾸기 (마감 후에도 가능)
+· 참석 홍길동 / 불참 홍길동 — 참석·불참 바꾸기 (마감 후에도 가능)
 · 수정 장소 달월 — 장소 바꾸기
-· 수정 날짜 261024 — 날짜 바꾸기
-· 수정 멤버 홍길동 김철수 — 멤버 바꾸기
+· 수정 날짜 261031 — 날짜 바꾸기
+· 수정 멤버 김기항 김민규 — 김기항 불참, 김민규 참석
 · 투표종료 — 지금 마감
 · 투표삭제 — 투표 삭제
 · 투표조회 — 투표 목록
@@ -673,7 +673,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "수정", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -694,7 +694,7 @@ def parse_command(text: str) -> tuple[str, list[str]] | None:
     cmd, args = words[start].lstrip("!"), words[start + 1:]
     if cmd not in COMMANDS:
         return None
-    if cmd == "투표" and args[:1] in (["종료"], ["완료"], ["조회"], ["삭제"]):  # "투표 종료/완료/조회/삭제" 도 허용
+    if cmd == "투표" and args[:1] in (["종료"], ["완료"], ["조회"]):  # "투표 종료/완료/조회" 도 허용
         cmd, args = "투표" + args[0], args[1:]
         if cmd == "투표완료":
             cmd = "투표종료"
@@ -769,6 +769,12 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         return f"투표가 생성되었습니다!\n{poll_summary(poll)}\n\n{VOTE_HINT}", vote_buttons(poll)
 
     if cmd in SIDES:
+        if args and not (args[0].startswith("#") or args[0].isdigit()) \
+                and _load(USERS_FILE).get(user_key) in ALLOWED_NAMES:
+            # 관리자: 참석 김기항 / 불참 김기항 → 그 사람의 참석·불참을 바꾼다 (마감 후에도 가능)
+            target = " ".join(args).strip('"')
+            poll = set_attendance(room, target, SIDES[cmd])
+            return f"{target}님을 {cmd}으로 바꿨어요.\n{poll_summary(poll)}", squad_buttons(poll, now)
         polls = load_polls()
         pid = None
         if args and (args[0].startswith("#") or args[0].isdigit()):  # "참석 2" 또는 버튼의 "참석 #2"
@@ -834,19 +840,14 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         return make_team(room, no, game_mode), []
 
     if cmd == "수정":
-        usage = ("사용법: 수정 [번호] 장소 [새 장소] / 수정 [번호] 날짜 [YYMMDD] / 수정 [번호] 멤버 [A] [B]\n"
-                 "번호는 생략하면 진행중인 가장 최근 투표예요.")
+        usage = ("사용법: 수정 장소 [새 장소] / 수정 날짜 [YYMMDD] / 수정 멤버 [불참할 이름] [참석할 이름]\n"
+                 "가장 최근 투표를 고칩니다.")
         no = None  # 맨 앞의 숫자 = 수정할 투표 번호 (예: 수정 2 장소 강남역)
         if args and args[0].lstrip("#").isdigit():
             no, args = int(args[0].lstrip("#")), args[1:]
         if not args:
             get_poll(room) if no is None else get_poll_no(room, no)
             return usage, []
-        if args[-1] in ("참석", "불참") and args[0] not in ("장소", "날짜", "멤버"):
-            # 수정 홍길동 불참 → 가장 최근(또는 지정) 투표에서 이름의 참석/불참을 바꾼다 (마감 후에도 가능)
-            name = " ".join(args[:-1]).strip('"')
-            poll = set_attendance(room, name, SIDES[args[-1]], no=no)
-            return f"{name}님을 {args[-1]}으로 바꿨어요.\n{poll_summary(poll)}", squad_buttons(poll, now)
         sub, sub_args = args[0], args[1:]
         if sub == "장소":
             if not sub_args:
@@ -857,10 +858,11 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                 get_poll(room)
                 return "사용법: 수정 날짜 [YYMMDD]  예) 수정 날짜 261024", []
             poll = update_poll(room, date_str=sub_args[0], no=no)
-        elif sub == "멤버":
+        elif sub == "멤버":  # 수정 멤버 김기항 김민규 → 김기항 불참, 김민규 참석
             if len(sub_args) != 2:
-                return "사용법: 수정 멤버 [기존 이름] [새 이름]", []
-            poll = replace_member(room, *sub_args, no=no)
+                return "사용법: 수정 멤버 [불참할 이름] [참석할 이름]\n예) 수정 멤버 김기항 김민규", []
+            set_attendance(room, sub_args[0], SIDES["불참"], no=no)
+            poll = set_attendance(room, sub_args[1], SIDES["참석"], no=no)
         else:
             return "수정할 항목은 장소 / 날짜 / 멤버 중 하나예요.", []
         return f"{poll['no']}번 투표를 수정했어요.\n{poll_summary(poll)}", squad_buttons(poll, now)
@@ -872,10 +874,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return "따옴표가 짝이 맞지 않아요. 예) 용병 261017 \"홍 길동\" 김철수", []
         if not tokens:
             return "사용법: 용병 이름 [이름2 ...]  예) 용병 홍길동 (최근 투표에 추가)", []
-        if len(tokens) >= 2 and parse_date(tokens[0]):  # 날짜가 있으면 그 날짜 투표에, 없으면 최근 투표에
-            date_str, names = tokens[0], tokens[1:]
-        else:
-            date_str, names = None, tokens
+        date_str, names = None, tokens  # 항상 가장 최근 투표에 추가
         poll, added, skipped = add_mercenaries(room, date_str, names, now)
         lines = []
         if added:
@@ -912,7 +911,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         ]
         return "[투표 목록] 🟢진행중 🔒마감\n" + "\n".join(lines) + "\n\n상세: 투표조회 번호 / 삭제: 투표삭제 번호", []
 
-    if cmd in ("삭제", "투표삭제"):
+    if cmd == "투표삭제":
         no = _parse_no(args[0]) if args else None
         return f"'{delete_poll(room, no)}' 투표를 삭제했습니다.", []
 
