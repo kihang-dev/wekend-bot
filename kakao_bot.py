@@ -112,10 +112,10 @@ def parse_date(s: str) -> datetime | None:
         return None
 
 
-def calc_deadline(date: datetime) -> datetime:
-    """해당 날짜가 속한 주의 다음주 수요일 23:00 (월요일 시작 기준)"""
-    monday = date - timedelta(days=date.weekday())
-    return (monday + timedelta(days=9)).replace(hour=23, minute=0, second=0, microsecond=0)
+def calc_deadline(base: datetime) -> datetime:
+    """투표를 만든 날(base) 기준 다음주 수요일 23:00 (월요일 시작 기준)"""
+    next_monday = base - timedelta(days=base.weekday()) + timedelta(days=7)
+    return (next_monday + timedelta(days=2)).replace(hour=23, minute=0, second=0, microsecond=0)
 
 
 def fmt_deadline(iso: str) -> str:
@@ -254,7 +254,8 @@ def create_poll(room: str, date_str: str, place: str, creator: str,
         "no": next_no(polls.get(room) or []),
         "desc": (desc or "").strip(),
         "title": "",
-        "deadline": calc_deadline(date).isoformat(),
+        "created": (now or now_kst()).isoformat(),
+        "deadline": calc_deadline(now or now_kst()).isoformat(),
         "attend": {},
         "absent": {},
         "creator": creator,
@@ -324,7 +325,8 @@ def update_poll(room: str, date_str: str | None = None, place: str | None = None
         if not date:
             raise PollError("날짜는 YYMMDD 형식으로 입력해주세요. 예) 261024")
         poll["date"] = date_str
-        poll["deadline"] = calc_deadline(date).isoformat()
+        base = datetime.fromisoformat(poll["created"]) if poll.get("created") else now_kst()
+        poll["deadline"] = calc_deadline(base).isoformat()
     if place is not None:
         if not place.strip():
             raise PollError("장소를 입력해주세요.")
