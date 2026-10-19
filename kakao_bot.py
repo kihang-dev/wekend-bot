@@ -473,7 +473,6 @@ def push_squad(commit_msg: str) -> bool:
         return subprocess.run(["git", *args], cwd=SQUAD_REPO,
                               capture_output=True, text=True, timeout=60)
 
-    run("pull", "--rebase", "origin", "HEAD")  # push 충돌 방지: 먼저 최신으로
     run("add", "index.html")
     if not run("status", "--porcelain").stdout.strip():
         return True  # 변경 없음
@@ -523,8 +522,9 @@ def _squad_job(title: str, members: list[str], game_mode: str) -> None:
         try:
             pull_squad()
             build_squad_html(members, game_mode)
-            ok = publish_squad()
-            print(f"팀짜기 {title}: {'완료' if ok else '실패'}")
+            pushed = push_squad(f"팀 구성 업데이트: {title}")  # GitHub 에 커밋·푸시
+            ok = publish_squad()  # VM 웹 페이지 갱신
+            print(f"팀짜기 {title}: {'완료' if ok else '실패'}" + ("" if pushed else " (GitHub push 실패)"))
         except Exception as e:
             print(f"팀짜기 {title} 오류:", repr(e))
 
