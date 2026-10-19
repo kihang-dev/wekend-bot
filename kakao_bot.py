@@ -69,9 +69,9 @@ HELP_TEXT = """📖 위켄봇 사용법
 
 [관리]
 · 참석 홍길동 / 불참 홍길동 — 참석·불참 바꾸기 (마감 후에도 가능)
-· 수정 장소 달월 — 장소 바꾸기
-· 수정 날짜 261031 — 날짜 바꾸기
-· 수정 멤버 김기항 김민규 — 김기항 불참, 김민규 참석
+· 장소 달월 — 장소 바꾸기
+· 날짜 261031 — 날짜 바꾸기
+· 멤버 김기항 김민규 — 김기항 불참, 김민규 참석
 · 투표종료 — 지금 마감
 · 투표삭제 — 투표 삭제
 · 투표조회 — 투표 목록
@@ -680,7 +680,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "수정", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -740,6 +740,8 @@ OPEN_COMMANDS = {"이름", "참석", "불참"}  # 이름 등록과 참석/불참
 
 
 def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime | None) -> tuple[str, list]:
+    if cmd in ("장소", "날짜") or (cmd == "멤버" and args):  # 수정 없이: 장소 달월 / 날짜 261031 / 멤버 김기항 김민규
+        args, cmd = [cmd] + args, "수정"
     if cmd not in OPEN_COMMANDS:  # 이름·참석·불참 외에는 지정된 멤버만 쓸 수 있다 (도움말 포함)
         my_name = _load(USERS_FILE).get(user_key)
         if not my_name:
@@ -850,7 +852,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         return make_team(room, no, game_mode), []
 
     if cmd == "수정":
-        usage = ("사용법: 수정 장소 [새 장소] / 수정 날짜 [YYMMDD] / 수정 멤버 [불참할 이름] [참석할 이름]\n"
+        usage = ("사용법: 장소 [새 장소] / 날짜 [YYMMDD] / 멤버 [불참할 이름] [참석할 이름]\n"
                  "가장 최근 투표를 고칩니다.")
         no = None  # 맨 앞의 숫자 = 수정할 투표 번호 (예: 수정 2 장소 강남역)
         if args and args[0].lstrip("#").isdigit():
@@ -861,16 +863,16 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         sub, sub_args = args[0], args[1:]
         if sub == "장소":
             if not sub_args:
-                return "사용법: 수정 장소 [새 장소]", []
+                return "사용법: 장소 [새 장소]", []
             poll = update_poll(room, place=" ".join(sub_args), no=no)
         elif sub == "날짜":
             if not sub_args or not parse_date(sub_args[0]):
                 get_poll(room)
-                return "사용법: 수정 날짜 [YYMMDD]  예) 수정 날짜 261024", []
+                return "사용법: 날짜 [YYMMDD]  예) 날짜 261031", []
             poll = update_poll(room, date_str=sub_args[0], no=no)
         elif sub == "멤버":  # 수정 멤버 김기항 김민규 → 김기항 불참, 김민규 참석
             if len(sub_args) != 2:
-                return "사용법: 수정 멤버 [불참할 이름] [참석할 이름]\n예) 수정 멤버 김기항 김민규", []
+                return "사용법: 멤버 [불참할 이름] [참석할 이름]\n예) 멤버 김기항 김민규", []
             set_attendance(room, sub_args[0], SIDES["불참"], no=no)
             poll = set_attendance(room, sub_args[1], SIDES["참석"], no=no)
             return poll_reply(poll, now, f"{sub_args[0]}님을 불참, {sub_args[1]}님을 참석으로 바꿨어요.")
