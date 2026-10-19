@@ -40,7 +40,7 @@ SCHEDULE_FILE = HERE / "schedule.json"  # 자동 투표를 이미 만든 날짜 
 # 매주 토요일 10시에 자동으로 올리는 정기 투표 (날짜는 만드는 날로부터 다음 주 토요일)
 WEEKLY_POLL = {
     "room": "bg2_YWwZGRLkPjp4l8ugIkYR8_tJG-zvoVAOew",
-    "place": "달월",
+    "place": "월곶",
     "desc": "정기풋살",
     "weekday": 5,  # 토요일 (월=0)
     "hour": 10,    # 오전 10시
@@ -62,23 +62,22 @@ HELP_TEXT = """📖 위켄봇 사용법
 
 [투표]
 · 투표 — 진행중인 투표 보기
-· 투표 261017 달월 — 투표 만들기 (날짜 장소)
-· 투표 261017 "강남역 2번출구" 정기풋살 — 띄어쓰기는 따옴표, 설명은 생략 가능
-· 참석 / 불참 — 최근 투표에 응답 (번호 지정: 참석 2)
-· 용병 261017 홍길동 — 용병 추가
+· 참석 / 불참 — 최근 투표에 응답
+· 용병 261017 홍길동 — 용병 추가 (마감 후에도 가능)
 · 멤버 — 마감 후 참석자 명단
 ※ 마감: 다음 주 수요일 23:00
 
 [관리]
-· 변경 홍길동 불참 — 참석·불참 바꾸기 (마감 후에도 가능)
-· 수정 장소 강남역 — 장소 바꾸기 (날짜 261024 / 멤버 홍길동 김철수도 가능)
-· 투표종료 — 지금 마감 (번호 지정: 투표종료 2)
-· 투표삭제 2 — 투표 삭제
+· 수정 홍길동 불참 — 참석·불참 바꾸기 (마감 후에도 가능)
+· 수정 장소 달월 — 장소 바꾸기
+· 수정 날짜 261024 — 날짜 바꾸기
+· 수정 멤버 홍길동 김철수 — 멤버 바꾸기
+· 투표종료 — 지금 마감
+· 투표삭제 — 투표 삭제
 · 투표조회 — 투표 목록
 
 [스쿼드]
-· 스쿼드 — 스쿼드 페이지 링크
-· 팀짜기 — 참석자로 팀 짜기 (팀짜기 2 / 팀짜기 매칭·자체)"""
+· 스쿼드 — 스쿼드 페이지 링크"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
 def vote_buttons(poll: dict) -> list[dict]:
@@ -280,13 +279,16 @@ def cast_vote(room: str, user_key: str, name: str, side: str,
     return poll
 
 
-def set_attendance(room: str, name: str, side: str) -> dict:
-    """가장 최근 투표에서 이름의 참석/불참을 바꾼다. 마감 후에도 가능하다. 명단에 없으면 새로 넣는다."""
+def set_attendance(room: str, name: str, side: str, no: int | None = None) -> dict:
+    """투표의 참석/불참을 바꾼다 (번호 생략 시 가장 최근 투표). 마감 후에도 가능하다. 명단에 없으면 새로 넣는다."""
     polls = load_polls()
-    lst = polls.get(room) or []
-    if not lst:
-        raise PollError(NO_POLL, 404)
-    poll = lst[-1]
+    if no is None:
+        lst = polls.get(room) or []
+        if not lst:
+            raise PollError(NO_POLL, 404)
+        poll = lst[-1]
+    else:
+        poll = find_by_no(polls, room, no)
     other = "absent" if side == "attend" else "attend"
     key = (next((k for k, n in poll["attend"].items() if n == name), None)
            or next((k for k, n in poll["absent"].items() if n == name), None))
@@ -401,9 +403,7 @@ def add_mercenaries(room: str, date_str: str, names: list[str],
     if not same:
         raise PollError(f"{date_str} 날짜의 투표가 없어요. 투표조회 로 확인해주세요.", 404)
     opened = [p for p in same if not is_closed(p, now)]
-    poll = (opened or same)[-1]
-    if is_closed(poll, now):
-        raise PollError(f"'{poll['title']}' 투표는 마감되어 용병을 추가할 수 없어요.", 409)
+    poll = (opened or same)[-1]  # 마감 후에도 용병을 추가할 수 있다
     users = _load(USERS_FILE)
     added, skipped = [], []
     for name in names:
@@ -574,7 +574,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "변경"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -716,6 +716,11 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         if not args:
             get_poll(room) if no is None else get_poll_no(room, no)
             return usage, []
+        if args[-1] in ("참석", "불참") and args[0] not in ("장소", "날짜", "멤버"):
+            # 수정 홍길동 불참 → 가장 최근(또는 지정) 투표에서 이름의 참석/불참을 바꾼다 (마감 후에도 가능)
+            name = " ".join(args[:-1]).strip('"')
+            poll = set_attendance(room, name, SIDES[args[-1]], no=no)
+            return f"{name}님을 {args[-1]}으로 바꿨어요.\n{poll_summary(poll)}", []
         sub, sub_args = args[0], args[1:]
         if sub == "장소":
             if not sub_args:
@@ -749,17 +754,6 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         if skipped:
             lines.append(f"이미 명단에 있어요: {', '.join(skipped)}")
         return "\n".join(lines) + f"\n{poll_summary(poll)}", []
-
-    if cmd == "변경":  # 변경 홍길동 불참 → 가장 최근 투표에서 이름의 참석/불참을 바꾼다 (마감 후에도 가능)
-        try:
-            tokens = shlex.split(" ".join(args))
-        except ValueError:
-            return "따옴표가 짝이 맞지 않아요. 예) 변경 \"홍 길동\" 불참", []
-        if len(tokens) < 2 or tokens[-1] not in ("참석", "불참"):
-            return "사용법: 변경 이름 참석/불참\n예) 변경 홍길동 불참", []
-        name, label = " ".join(tokens[:-1]), tokens[-1]
-        poll = set_attendance(room, name, SIDES[label])
-        return f"{name}님을 {label}으로 변경했어요.\n{poll_summary(poll)}", []
 
     if cmd == "투표종료":
         no = _parse_no(args[0]) if args else None
