@@ -63,7 +63,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 [투표]
 · 투표 — 진행중인 투표 보기
 · 참석 / 불참 — 최근 투표에 응답
-· 용병 261017 홍길동 — 용병 추가 (마감 후에도 가능)
+· 용병 홍길동 — 최근 투표에 용병 추가 (마감 후에도 가능)
 · 멤버 — 마감 후 참석자 명단
 ※ 마감: 다음 주 수요일 23:00
 
@@ -86,6 +86,13 @@ def vote_buttons(poll: dict) -> list[dict]:
         {"label": "참석", "action": "message", "messageText": f"참석 #{poll['no']}"},
         {"label": "불참", "action": "message", "messageText": f"불참 #{poll['no']}"},
     ]
+def squad_buttons(poll: dict, now: datetime | None) -> list[dict]:
+    """마감된 투표에는 '스쿼드 만들기' 버튼을 붙인다 (누르면 @위켄봇 스쿼드 입력)."""
+    if not is_closed(poll, now):
+        return []
+    return [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 스쿼드"}]
+
+
 SIDES = {"참석": "attend", "불참": "absent"}
 
 
@@ -395,17 +402,23 @@ def delete_poll(room: str, no: int | None = None) -> str:
     return title
 
 
-def add_mercenaries(room: str, date_str: str, names: list[str],
+def add_mercenaries(room: str, date_str: str | None, names: list[str],
                     now: datetime | None = None) -> tuple[dict, list[str], list[str]]:
-    """해당 날짜 투표의 참석자 명단에 용병을 추가한다. (투표, 추가된 이름, 이미 명단에 있던 이름)"""
-    if not parse_date(date_str):
-        raise PollError("날짜는 YYMMDD 형식으로 입력해주세요. 예) 용병 261017 홍길동")
+    """해당 날짜 투표(날짜 생략 시 최근 투표)의 참석자 명단에 용병을 추가한다. (투표, 추가된 이름, 이미 명단에 있던 이름)"""
     polls = load_polls()
-    same = [p for p in polls.get(room) or [] if p["date"] == date_str]
-    if not same:
-        raise PollError(f"{date_str} 날짜의 투표가 없어요. 투표조회 로 확인해주세요.", 404)
-    opened = [p for p in same if not is_closed(p, now)]
-    poll = (opened or same)[-1]  # 마감 후에도 용병을 추가할 수 있다
+    if date_str is None:  # 날짜 생략 → 가장 최근 투표
+        lst = polls.get(room) or []
+        if not lst:
+            raise PollError(NO_POLL, 404)
+        poll = lst[-1]
+    else:
+        if not parse_date(date_str):
+            raise PollError("날짜는 YYMMDD 형식으로 입력해주세요. 예) 용병 261017 홍길동")
+        same = [p for p in polls.get(room) or [] if p["date"] == date_str]
+        if not same:
+            raise PollError(f"{date_str} 날짜의 투표가 없어요. 투표조회 로 확인해주세요.", 404)
+        opened = [p for p in same if not is_closed(p, now)]
+        poll = (opened or same)[-1]  # 마감 후에도 용병을 추가할 수 있다
     users = _load(USERS_FILE)
     added, skipped = [], []
     for name in names:
@@ -738,7 +751,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             # 수정 홍길동 불참 → 가장 최근(또는 지정) 투표에서 이름의 참석/불참을 바꾼다 (마감 후에도 가능)
             name = " ".join(args[:-1]).strip('"')
             poll = set_attendance(room, name, SIDES[args[-1]], no=no)
-            return f"{name}님을 {args[-1]}으로 바꿨어요.\n{poll_summary(poll)}", []
+            return f"{name}님을 {args[-1]}으로 바꿨어요.\n{poll_summary(poll)}", squad_buttons(poll, now)
         sub, sub_args = args[0], args[1:]
         if sub == "장소":
             if not sub_args:
@@ -755,23 +768,26 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             poll = replace_member(room, *sub_args, no=no)
         else:
             return "수정할 항목은 장소 / 날짜 / 멤버 중 하나예요.", []
-        return f"{poll['no']}번 투표를 수정했어요.\n{poll_summary(poll)}", []
+        return f"{poll['no']}번 투표를 수정했어요.\n{poll_summary(poll)}", squad_buttons(poll, now)
 
     if cmd == "용병":
         try:  # 띄어쓰기가 있는 닉네임은 따옴표로 묶는다: 용병 261017 "홍 길동" 김철수
             tokens = shlex.split(" ".join(args))
         except ValueError:
             return "따옴표가 짝이 맞지 않아요. 예) 용병 261017 \"홍 길동\" 김철수", []
-        if len(tokens) < 2:
-            return ("사용법: 용병 날짜 이름 [이름2 ...]\n예) 용병 261017 홍길동\n"
-                    "예) 용병 261017 \"홍 길동\" 김철수"), []
-        poll, added, skipped = add_mercenaries(room, tokens[0], tokens[1:], now)
+        if not tokens:
+            return "사용법: 용병 이름 [이름2 ...]  예) 용병 홍길동 (최근 투표에 추가)", []
+        if len(tokens) >= 2 and parse_date(tokens[0]):  # 날짜가 있으면 그 날짜 투표에, 없으면 최근 투표에
+            date_str, names = tokens[0], tokens[1:]
+        else:
+            date_str, names = None, tokens
+        poll, added, skipped = add_mercenaries(room, date_str, names, now)
         lines = []
         if added:
             lines.append(f"용병 {', '.join(added)}님을 '{poll['title']}' 참석자에 추가했어요.")
         if skipped:
             lines.append(f"이미 명단에 있어요: {', '.join(skipped)}")
-        return "\n".join(lines) + f"\n{poll_summary(poll)}", []
+        return "\n".join(lines) + f"\n{poll_summary(poll)}", squad_buttons(poll, now)
 
     if cmd == "투표종료":
         no = _parse_no(args[0]) if args else None
