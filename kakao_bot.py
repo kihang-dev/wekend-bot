@@ -553,6 +553,22 @@ def close_due_polls(now: datetime) -> int:
     return len(started)
 
 
+def fix_open_deadlines(now: datetime) -> int:
+    """생성일 기록이 없던 진행중 투표(업데이트 전에 만든 투표)는 지금을 생성일로 보고 마감을 다시 계산한다."""
+    polls = load_polls()
+    fixed = 0
+    for lst in polls.values():
+        for p in lst:
+            if p.get("created") or p.get("closed_at") or is_closed(p, now):
+                continue
+            p["created"] = now.isoformat()
+            p["deadline"] = calc_deadline(now).isoformat()
+            fixed += 1
+    if fixed:
+        _save(POLLS_FILE, polls)
+    return fixed
+
+
 def make_team(room: str, no: int | None = None, game_mode: str = "auto") -> str:
     """수동 팀짜기: 최근(또는 지정) 투표 참석자로 팀을 짠다. 결과는 잠시 뒤 링크에 반영된다."""
     poll = get_poll(room) if no is None else get_poll_no(room, no)
@@ -1047,6 +1063,7 @@ async def main() -> int:
         sys.exit('BOT_TOKEN 환경변수가 없습니다. .env 파일이나 export BOT_TOKEN="봇 인증 토큰" 으로 설정하세요.')
 
     start_head = git("rev-parse", "HEAD")
+    fix_open_deadlines(now_kst())  # 생성일 기준 마감 (진행중 투표 한 번 보정)
     print(f"봇 시작 (버전 {start_head[:7] or '알수없음'})")
     stop = asyncio.Event()
     if start_head:
