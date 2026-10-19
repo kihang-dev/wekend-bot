@@ -663,8 +663,8 @@ def _parse_no(s: str) -> int:
     return int(s)
 
 
-ALLOWED_NAMES = {"김민규", "이성학", "김기항"}  # 명령어를 쓸 수 있는 닉네임 (이름 등록은 누구나)
-OPEN_COMMANDS = {"이름"}  # 이름 등록만 누구나 쓸 수 있다
+ALLOWED_NAMES = {"김민규", "이성학", "김기항"}  # 나머지 명령어를 쓸 수 있는 닉네임
+OPEN_COMMANDS = {"이름", "참석", "불참"}  # 이름 등록과 참석/불참은 누구나 쓸 수 있다
 
 
 def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime | None) -> tuple[str, list]:
