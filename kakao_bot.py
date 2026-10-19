@@ -873,6 +873,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                 return "사용법: 수정 멤버 [불참할 이름] [참석할 이름]\n예) 수정 멤버 김기항 김민규", []
             set_attendance(room, sub_args[0], SIDES["불참"], no=no)
             poll = set_attendance(room, sub_args[1], SIDES["참석"], no=no)
+            return poll_reply(poll, now, f"{sub_args[0]}님을 불참, {sub_args[1]}님을 참석으로 바꿨어요.")
         else:
             return "수정할 항목은 장소 / 날짜 / 멤버 중 하나예요.", []
         return f"{poll['no']}번 투표를 수정했어요.\n{poll_summary(poll)}", squad_buttons(poll, now)
