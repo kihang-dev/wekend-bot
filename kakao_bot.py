@@ -445,19 +445,33 @@ SQUAD_PUBLISH_DIR = Path(os.environ.get("SQUAD_PUBLISH_DIR", "/var/www/squad"))
 SQUAD_REPO = Path(os.environ.get("SQUAD_REPO", str(Path.home() / "weekenders-futsal")))
 
 
-def roster_text() -> str:
-    """weekenders-futsal 의 전체 명단 (positions.py 의 선수 목록). 조회 전에 레포를 최신으로 받는다."""
+def _load_squad_module(filename: str):
+    """weekenders-futsal 의 데이터 파일(positions.py, grades.py)을 읽어 모듈로 돌려준다."""
     import importlib.util
-    pull_squad()
-    path = SQUAD_REPO / "positions.py"
+    path = SQUAD_REPO / filename
     if not path.exists():
         raise PollError(f"명단 파일을 찾을 수 없어요: {path}", 500)
-    spec = importlib.util.spec_from_file_location("squad_positions", path)
+    spec = importlib.util.spec_from_file_location(path.stem, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    players = list(mod.PLAYER_POSITIONS.keys())
-    body = "\n".join(f"{i}. {n}" for i, n in enumerate(players, 1))
-    return f"👥 전체 명단 ({len(players)}명)\n{body}"
+    return mod
+
+
+def roster_text() -> str:
+    """전체 명단: 이름 · 등급 · 선호 포지션. 등급 높은 순으로 보여 준다. 조회 전에 레포를 최신으로 받는다."""
+    pull_squad()
+    positions = _load_squad_module("positions.py").PLAYER_POSITIONS
+    grades = _load_squad_module("grades.py").PLAYER_GRADES
+    order = ["A+", "A", "B+", "B", "C", "D"]
+    names = list(positions) + [n for n in grades if n not in positions]
+    names.sort(key=lambda n: (order.index(grades[n]) if grades.get(n) in order else len(order), n))
+    lines = []
+    for i, n in enumerate(names, 1):
+        grade = grades.get(n, "-")
+        pos = positions.get(n)
+        pos_text = " / ".join(pos) if pos else "-"
+        lines.append(f"{i}. {n} · {grade} · {pos_text}")
+    return f"👥 전체 명단 ({len(names)}명)\n(이름 · 등급 · 포지션 1순위/2순위)\n" + "\n".join(lines)
 
 
 def make_squad(room: str) -> str:
