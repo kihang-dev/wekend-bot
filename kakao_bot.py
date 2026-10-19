@@ -680,7 +680,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
     if cmd == "이름":
         if not args:
             current = _load(USERS_FILE).get(user_key, "없음")
-            return f"사용법: 이름 [닉네임]\n현재 등록된 이름: {current}", []
+            return f"사용법: @위켄봇 이름 [닉네임]\n현재 등록된 이름: {current}", []
         name = register_name(user_key, " ".join(args))
         return f"이름을 '{name}'(으)로 등록했어요.", []
 
