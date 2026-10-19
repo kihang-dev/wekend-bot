@@ -89,6 +89,13 @@ def vote_buttons(poll: dict) -> list[dict]:
         {"label": "참석", "action": "message", "messageText": f"참석 #{poll['no']}"},
         {"label": "불참", "action": "message", "messageText": f"불참 #{poll['no']}"},
     ]
+def poll_reply(poll: dict, now: datetime | None, text: str) -> tuple[str, list]:
+    """진행중이면 문구 + 투표 카드(참석/불참 버튼), 마감됐으면 문구만(스쿼드 버튼은 유지)."""
+    if is_closed(poll, now):
+        return text, squad_buttons(poll, now)
+    return f"{text}\n{poll_summary(poll)}", vote_buttons(poll)
+
+
 def squad_buttons(poll: dict, now: datetime | None) -> list[dict]:
     """마감된 투표에는 '스쿼드 만들기' 버튼을 붙인다 (누르면 @위켄봇 스쿼드만들기 입력)."""
     if not is_closed(poll, now):
@@ -774,7 +781,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             # 관리자: 참석 김기항 / 불참 김기항 → 그 사람의 참석·불참을 바꾼다 (마감 후에도 가능)
             target = " ".join(args).strip('"')
             poll = set_attendance(room, target, SIDES[cmd])
-            return f"{target}님을 {cmd}으로 바꿨어요.\n{poll_summary(poll)}", squad_buttons(poll, now)
+            return poll_reply(poll, now, f"{target}님을 {cmd}으로 바꿨어요.")
         polls = load_polls()
         pid = None
         if args and (args[0].startswith("#") or args[0].isdigit()):  # "참석 2" 또는 버튼의 "참석 #2"
@@ -790,6 +797,9 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         name = _load(USERS_FILE).get(user_key)
         if not name:
             return "먼저 이름을 알려주세요.\n예) 이름 홍길동\n(본인 이름을 최초 등록해주세요.)", []
+        target = find_poll_by_id(polls, room, pid) if pid else _require(polls, room, now)
+        if user_key in target[SIDES[cmd]]:  # 이미 같은 상태(참석중 또는 불참중)면 아무 응답도 하지 않는다
+            return None
         poll = cast_vote(room, user_key, name, SIDES[cmd], now, poll_id=pid)
         return f"{name}님 {cmd}으로 기록했어요.\n{poll_summary(poll)}", vote_buttons(poll)
 
@@ -881,7 +891,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             lines.append(f"용병 {', '.join(added)}님을 '{poll['title']}' 참석자에 추가했어요.")
         if skipped:
             lines.append(f"이미 명단에 있어요: {', '.join(skipped)}")
-        return "\n".join(lines) + f"\n{poll_summary(poll)}", squad_buttons(poll, now)
+        return poll_reply(poll, now, "\n".join(lines))
 
     if cmd == "투표종료":
         no = _parse_no(args[0]) if args else None
