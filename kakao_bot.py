@@ -77,7 +77,8 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 투표조회 — 투표 목록
 
 [스쿼드]
-· 스쿼드 — 스쿼드 페이지 링크"""
+· 스쿼드 — 스쿼드 페이지 링크
+· 스쿼드만들기 — 참석자로 팀을 새로 짜서 페이지에 반영"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
 def vote_buttons(poll: dict) -> list[dict]:
@@ -87,10 +88,10 @@ def vote_buttons(poll: dict) -> list[dict]:
         {"label": "불참", "action": "message", "messageText": f"불참 #{poll['no']}"},
     ]
 def squad_buttons(poll: dict, now: datetime | None) -> list[dict]:
-    """마감된 투표에는 '스쿼드 만들기' 버튼을 붙인다 (누르면 @위켄봇 스쿼드 입력)."""
+    """마감된 투표에는 '스쿼드 만들기' 버튼을 붙인다 (누르면 @위켄봇 스쿼드만들기 입력)."""
     if not is_closed(poll, now):
         return []
-    return [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 스쿼드"}]
+    return [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 스쿼드만들기"}]
 
 
 SIDES = {"참석": "attend", "불참": "absent"}
@@ -605,7 +606,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "수정", "삭제", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -720,7 +721,10 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "참석자가 없어요."
         return f"🗳 {poll['no']}번 · {poll['title']} (마감)\n참석 {len(att)}명\n{body}", []
 
-    if cmd == "스쿼드":
+    if cmd == "스쿼드":  # 스쿼드 페이지 주소만 안내
+        return make_squad(room), []
+
+    if cmd == "스쿼드만들기":  # 최근 투표 참석자로 팀을 새로 짜서 페이지에 반영
         return make_team(room), []
 
     if cmd == "팀짜기":
@@ -793,13 +797,13 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         no = _parse_no(args[0]) if args else None
         poll = close_poll(room, now, no)
         att = list(poll["attend"].values())
-        # 카드 설명은 400자까지만 보이므로 짧게 쓴다. 버튼을 누르면 '@위켄봇 스쿼드'가 입력된다.
+        # 카드 설명은 400자까지만 보이므로 짧게 쓴다. 버튼을 누르면 '@위켄봇 스쿼드만들기'가 입력된다.
         text = (f"🔒 '{poll['title']}' 투표를 마감했습니다.\n"
                 f"참석 {len(att)}명: {', '.join(att) if att else '-'}")
         if not att:
             return text, []
         text += "\n\n⚽ 아래 버튼을 눌러 스쿼드를 만드세요."
-        btn = [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 스쿼드"}]
+        btn = [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 스쿼드만들기"}]
         return text, btn
 
     if cmd == "투표조회":
