@@ -702,7 +702,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         return f"🗳 {poll['no']}번 · {poll['title']} (마감)\n참석 {len(att)}명\n{body}", []
 
     if cmd == "스쿼드":
-        return make_squad(room), []
+        return make_team(room), []
 
     if cmd == "팀짜기":
         # 팀짜기 → 최근 투표 참석자로 자동 모드 / 팀짜기 2 → 2번 투표
