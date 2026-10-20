@@ -78,7 +78,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 
 [스쿼드]
 · 스쿼드 — 스쿼드 페이지 링크
-· 스쿼드만들기 — 참석자로 팀을 새로 짜서 페이지에 반영
+· 팀짜기 — 참석자로 팀 구성 (인원에 따라 자동 매칭/자체)\n· 팀짜기 매칭 — 무조건 매칭 (6명 이상)\n· 팀짜기 자체 — 무조건 자체 (8명 이상)
 · 명단 — 전체 명단 보기
 · 포지션 김기항 ST/LB — 선호 포지션 바꾸기 (GitHub 반영)\n· 등급 — 전체 등급표\n· 등급 김민규 — 등급 조회\n· 등급 김민규 수비 A — 항목 수정\n· 등급 김민규 B B A A B B — 6개 전체 등록 (GitHub 반영)\n· 신규 김민규 BBCCBA ST/CB — 신규 선수 등록 (등급+포지션)"""
 
@@ -97,10 +97,10 @@ def poll_reply(poll: dict, now: datetime | None, text: str) -> tuple[str, list]:
 
 
 def squad_buttons(poll: dict, now: datetime | None) -> list[dict]:
-    """마감된 투표에는 '스쿼드 만들기' 버튼을 붙인다 (누르면 @위켄봇 스쿼드만들기 입력)."""
+    """마감된 투표에는 '스쿼드 만들기' 버튼을 붙인다 (누르면 @위켄봇 팀짜기 입력)."""
     if not is_closed(poll, now):
         return []
-    return [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 스쿼드만들기"}]
+    return [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 팀짜기"}]
 
 
 SIDES = {"참석": "attend", "불참": "absent"}
@@ -897,6 +897,11 @@ def make_team(room: str, no: int | None = None, game_mode: str = "auto") -> str:
     members = list(poll["attend"].values())
     if not members:
         raise PollError("참석자가 없어요. 참석 투표부터 받아주세요.")
+    min_n = {"self": 8, "match": 6, "auto": 6}.get(game_mode, 6)
+    if len(members) < min_n:
+        if game_mode == "self":
+            raise PollError(f"자체전은 8명 이상이어야 해요. (현재 {len(members)}명)\n6~7명이면 '팀짜기 매칭'으로 짜 주세요.")
+        raise PollError(f"팀을 짜려면 최소 {min_n}명이 필요해요. (현재 {len(members)}명)")
     start_squad(poll, game_mode)
     return (f"⚽ 팀 구성을 시작했어요. ({poll['title']}, {len(members)}명)\n"
             f"👉 {SQUAD_URL}\n(바로 반영됩니다)")
@@ -914,7 +919,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1086,11 +1091,8 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
     if cmd == "스쿼드":  # 스쿼드 페이지 주소만 안내
         return make_squad(room), []
 
-    if cmd == "스쿼드만들기":  # 최근 투표 참석자로 팀을 새로 짜서 페이지에 반영
-        return make_team(room), []
-
     if cmd == "팀짜기":
-        # 팀짜기 → 최근 투표 참석자로 자동 모드 / 팀짜기 2 → 2번 투표
+        # 팀짜기 → 최근 투표 참석자로 자동 모드(인원 따라 매칭/자체) / 팀짜기 2 → 2번 투표
         # 팀짜기 매칭 / 자체 → 모드 지정 (매칭=외부 상대, 자체=자체전)
         no = None
         game_mode = "auto"
@@ -1153,13 +1155,13 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         no = _parse_no(args[0]) if args else None
         poll = close_poll(room, now, no)
         att = list(poll["attend"].values())
-        # 카드 설명은 400자까지만 보이므로 짧게 쓴다. 버튼을 누르면 '@위켄봇 스쿼드만들기'가 입력된다.
+        # 카드 설명은 400자까지만 보이므로 짧게 쓴다. 버튼을 누르면 '@위켄봇 팀짜기'가 입력된다.
         text = (f"🔒 '{poll['title']}' 투표를 마감했습니다.\n"
                 f"참석 {len(att)}명: {', '.join(att) if att else '-'}")
         if not att:
             return text, []
         text += "\n\n⚽ 아래 버튼을 눌러 스쿼드를 만드세요."
-        btn = [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 스쿼드만들기"}]
+        btn = [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 팀짜기"}]
         return text, btn
 
     if cmd == "투표조회":
