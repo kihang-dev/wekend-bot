@@ -791,7 +791,10 @@ def place_text(place: str) -> str:
     info = PLACE_INFO.get(place)
     if not info:
         return f"📍 장소: {place}"
-    return f"📍 장소: {place}\n🏠 주소: {info['addr']}\n🗺 사진: {SQUAD_URL}{info['img']}"
+    from urllib.parse import quote
+    map_url = f"https://map.kakao.com/?q={quote(info['addr'])}"
+    return (f"📍 장소: {place}\n🏠 주소: {info['addr']}\n🗺 지도: {map_url}\n"
+            f"🖼 사진: {SQUAD_URL}{info['img']}")
 
 
 def latest_poll_any_room() -> dict | None:
