@@ -68,7 +68,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 ※ 마감: 다음 주 수요일 23:00
 
 [관리]
-· 참석 홍길동 / 불참 홍길동 — 참석·불참 바꾸기 (마감 후면 팀 자동 재구성)
+· 참석 홍길동 김민규 / 불참 홍길동 — 참석·불참 바꾸기, 여러 명 가능 (마감 후면 팀 자동 재구성)
 · 장소 달월 — 장소 바꾸기
 · 날짜 261031 — 날짜 바꾸기
 · 멤버 김기항 김민규 — 김기항 불참, 김민규 참석 (마감 후면 팀 자동 재구성)
@@ -80,7 +80,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 스쿼드 — 스쿼드 페이지 링크
 · 팀짜기 — 참석자로 팀 구성 (인원에 따라 자동 매칭/자체)\n· 팀짜기 매칭 — 무조건 매칭 (6명 이상)\n· 팀짜기 자체 — 무조건 자체 (8명 이상)
 · 명단 — 전체 명단 보기
-· 포지션 김기항 ST/LB — 선호 포지션 바꾸기 (GitHub 반영)\n· 등급 — 전체 등급표\n· 등급 김민규 — 등급 조회\n· 등급 김민규 수비 A — 항목 수정\n· 등급 김민규 B B A A B B — 6개 전체 등록 (GitHub 반영)\n· 신규 김민규 BBCCBA ST/CB — 신규 선수 등록 (등급+포지션)"""
+· 포지션 김기항 ST/LB — 선호 포지션 바꾸기 (GitHub 반영)\n· 신규 김민규 BBCCBA ST/CB — 신규 선수 등록 (등급+포지션)"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
 def vote_buttons(poll: dict) -> list[dict]:
@@ -1028,9 +1028,11 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         if args and not (args[0].startswith("#") or args[0].isdigit()) \
                 and _load(USERS_FILE).get(user_key) in ALLOWED_NAMES:
             # 관리자: 참석 김기항 / 불참 김기항 → 그 사람의 참석·불참을 바꾼다 (마감 후에도 가능)
-            target = " ".join(args).strip('"')
-            poll = set_attendance(room, target, SIDES[cmd])
-            return _regen_or_card(poll, now, f"{target}님을 {cmd}으로 바꿨어요.", True)
+            names = [a.strip('"') for a in args if a.strip('"')]  # 띄어쓰기로 여러 명 가능: 참석 김기항 김민규
+            poll = None
+            for nm in names:
+                poll = set_attendance(room, nm, SIDES[cmd])
+            return _regen_or_card(poll, now, f"{', '.join(names)}님을 {cmd}으로 바꿨어요.", True)
         polls = load_polls()
         pid = None
         if args and (args[0].startswith("#") or args[0].isdigit()):  # "참석 2" 또는 버튼의 "참석 #2"
