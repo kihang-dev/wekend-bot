@@ -606,26 +606,35 @@ def parse_grade_args(args: list[str]) -> tuple[str, str, dict | None]:
     return " ".join(args), "view", None
 
 
-GRADE_TABLE_PADS = {"이름": 1, "패스": 1, "리턴": 1, "수비": 1, "드리블": 2, "볼소유": 2, "골결정력": 3}  # 칸 양쪽 공백 수
+def _display_width(s: str) -> int:
+    """한글·한자는 2칸, 영문·숫자·기호·공백은 1칸으로 센다 (머리글 기준 칸 맞춤용)."""
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
 
 
 def grades_table_text() -> str:
-    """전체 등급표: 이름 | 6개 항목. 합계(점수) 높은 순. 칸마다 지정한 공백 수로 감싼다. grades.json 기준 (읽기만 함)."""
+    """전체 등급표: 이름 | 6개 항목. 합계(점수) 높은 순. 머리글 폭에 맞춰 값을 가운데 정렬한다. grades.json 기준 (읽기만 함)."""
     pull_squad()
     gm = _load_squad_module("grades.py")
     keys = gm.ABILITY_KEYS
     names = sorted(gm.PLAYER_ABILITIES.keys(), key=lambda n: (-gm.player_score(n), n))
+    name_w = max([_display_width("이름")] + [_display_width(n) for n in names])
+    key_w = {k: _display_width(k) for k in keys}
 
-    def cell(text: str, col: str) -> str:
-        p = GRADE_TABLE_PADS[col]
-        return " " * p + text + " " * p
+    def center(text: str, w: int) -> str:
+        pad = w - _display_width(text)
+        left = pad // 2
+        return " " * left + text + " " * (pad - left)
 
-    cols = ["이름"] + keys
-    lines = ["|".join(cell(c, c) for c in cols)]
+    def left(text: str, w: int) -> str:
+        return text + " " * (w - _display_width(text))
+
+    header = " | ".join([left("이름", name_w)] + [k for k in keys])
+    lines = [header]
     for n in names:
         ab = gm.PLAYER_ABILITIES[n]
-        vals = [cell(n, "이름")] + [cell(ab.get(k, "-"), k) for k in keys]
-        lines.append("|".join(vals))
+        cells = [left(n, name_w)] + [center(ab.get(k, "-"), key_w[k]) for k in keys]
+        lines.append(" | ".join(cells))
     return f"📊 등급표 ({len(names)}명)\n" + "\n".join(lines)
 
 
