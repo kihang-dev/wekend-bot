@@ -522,6 +522,24 @@ def save_patch_file(user_key: str, url: str, now: datetime | None) -> str | None
 POSITION_CODES = {"ST", "CM", "RB", "LB", "CB"}
 
 
+def parse_position_args(args: list[str]):
+    """포지션 입력을 (이름, 1순위, 2순위)로 바꾼다. 실패하면 None.
+    ST/CB, STCB, ST CB, ST · CB, ST / CB, stcb, st cb 를 모두 받는다."""
+    tail = []
+    i = len(args)
+    while i > 0 and re.fullmatch(r"[A-Za-z/·,]+", args[i - 1]):
+        tail.insert(0, args[i - 1])
+        i -= 1
+    name = " ".join(args[:i]).strip()
+    letters = re.sub(r"[^A-Za-z]", "", "".join(tail)).upper()
+    if not name or len(letters) != 4:
+        return None
+    first, second = letters[:2], letters[2:]
+    if first not in POSITION_CODES or second not in POSITION_CODES:
+        return None
+    return name, first, second
+
+
 def set_player_position(name: str, first: str, second: str) -> str:
     """선호 포지션을 positions.py 에 덮어쓰고 GitHub 에 커밋·푸시한다. 없던 선수는 새로 추가한다."""
     import re
@@ -952,21 +970,15 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
     if cmd == "패치":  # 관리자: 패치 파일을 올리면 서버 patch 폴더에 저장만 한다
         return request_patch(user_key, now), []
 
-    if cmd == "포지션":  # 포지션 김기항 ST/LB → 선호 포지션을 덮어쓴다
-        usage = "사용법: 포지션 이름 1순위/2순위\n예) 포지션 김기항 ST/LB\n(포지션: ST, CM, RB, LB, CB)"
-        if len(args) < 2:
+    if cmd == "포지션":  # 포지션 김기항 ST/CB (ST CB, STCB, ST·CB, stcb 등 모두 가능)
+        usage = ("사용법: 포지션 이름 1순위/2순위\n"
+                 "예) 포지션 김기항 ST/CB\n"
+                 "(띄어쓰기·구분자 없이 STCB 도 가능 / 포지션: ST, CM, RB, LB, CB)")
+        parsed = parse_position_args(args)
+        if not parsed:
             return usage, []
-        name, combo = " ".join(args[:-1]), args[-1].upper()
-        parts = combo.split("/")
-        if len(parts) != 2 or any(p not in POSITION_CODES for p in parts):
-            return usage, []
-        return set_player_position(name, parts[0], parts[1]), []
-
-    if cmd == "등급":  # 등급 조회 / 등급 김민규 수비 A / 등급 김민규 B B A A B B
-        name, mode, changes = parse_grade_args(args)
-        if mode == "error" or not _valid_grade_name(name):
-            return GRADE_USAGE, []
-        return set_player_grades(name, mode, changes), []
+        name, first, second = parsed
+        return set_player_position(name, first, second), []
 
     if cmd == "명단":  # weekenders-futsal 의 전체 명단
         return roster_text(), []
