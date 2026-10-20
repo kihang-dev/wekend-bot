@@ -80,7 +80,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 스쿼드 — 스쿼드 페이지 링크
 · 스쿼드만들기 — 참석자로 팀을 새로 짜서 페이지에 반영
 · 명단 — 전체 명단 보기
-· 포지션 김기항 ST/LB — 선호 포지션 바꾸기 (GitHub 반영)\n· 등급 김민규 — 등급 조회\n· 등급 김민규 수비 A — 항목 수정\n· 등급 김민규 B B A A B B — 6개 전체 등록 (GitHub 반영)"""
+· 포지션 김기항 ST/LB — 선호 포지션 바꾸기 (GitHub 반영)\n· 등급 김민규 — 등급 조회\n· 등급 김민규 수비 A — 항목 수정\n· 등급 김민규 B B A A B B — 6개 전체 등록 (GitHub 반영)\n· 신규 김민규 BBCCBA ST/CB — 신규 선수 등록 (등급+포지션)"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
 def vote_buttons(poll: dict) -> list[dict]:
@@ -510,28 +510,37 @@ def parse_position_args(args: list[str]):
     return name, first, second
 
 
+def update_positions_json(path: Path, name: str, first: str, second: str) -> None:
+    """positions.json 에서 선수 포지션을 바꾸거나(없으면 추가) 저장한다. 다른 선수 데이터는 그대로 둔다."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data[name] = [first, second]
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def position_text(name: str) -> str:
+    """선수의 선호 포지션을 positions.json 에서 읽어 보여 준다 (읽기만 함)."""
+    pull_squad()
+    data = json.loads((SQUAD_REPO / "positions.json").read_text(encoding="utf-8"))
+    if name not in data:
+        return f"❓ {name} 은(는) 포지션 등록이 없어요. 등록: 포지션 {name} ST/CB"
+    first, second = data[name]
+    return f"📍 {name} 선호 포지션: {first} / {second}"
+
+
 def set_player_position(name: str, first: str, second: str) -> str:
-    """선호 포지션을 positions.py 에 덮어쓰고 GitHub 에 커밋·푸시한다. 없던 선수는 새로 추가한다."""
-    import re
+    """선호 포지션을 positions.json 에 저장하고 GitHub 에 커밋·푸시한다. 없던 선수는 새로 추가한다."""
     import subprocess
-    path = SQUAD_REPO / "positions.py"
+    path = SQUAD_REPO / "positions.json"
     if not path.exists():
-        raise PollError(f"명단 파일을 찾을 수 없어요: {path}", 500)
+        raise PollError(f"포지션 파일을 찾을 수 없어요: {path}", 500)
     with SQUAD_LOCK:
         pull_squad()
-        text = path.read_text(encoding="utf-8")
-        line = f'    "{name}":  ("{first}", "{second}"),   # 1순위: {first}  / 2순위: {second}'
-        pattern = re.compile(rf'^[ \t]*"{re.escape(name)}":.*$', re.M)
-        if pattern.search(text):
-            text = pattern.sub(line, text, count=1)  # 기존 선수: 줄만 교체
-        else:
-            text = re.sub(r'\n\}\s*\n', f'\n{line}\n}}\n', text, count=1)  # 새 선수: 딕셔너리 끝에 추가
-        path.write_text(text, encoding="utf-8")
+        update_positions_json(path, name, first, second)
 
         def run(*args):
             return subprocess.run(["git", *args], cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
 
-        run("add", "positions.py")
+        run("add", "positions.json")
         r = run("commit", "-m", f"선호 포지션 변경: {name} {first}/{second}")
         if r.returncode != 0 and "nothing to commit" not in (r.stdout + r.stderr):
             raise PollError(f"커밋 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
@@ -634,6 +643,73 @@ def set_player_grades(name: str, mode: str, changes: dict | None) -> str:
             raise PollError(f"GitHub 푸시 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
     what = "전체 등록" if mode == "all" else "항목 수정"
     return f"✅ {name} {what} 완료 (GitHub 반영)\n" + grade_text(name, data[name])
+
+
+NEW_USAGE = ("사용법: 신규 이름 등급6개 포지션\n"
+             "예) 신규 김기항 BBCCBA ST/CB\n"
+             "   신규 김기항 B B C C B A ST CB\n"
+             "(등급: A B C D 6개 순서 패스 리턴 수비 드리블 볼소유 골결정력 / 포지션: ST CM RB LB CB)")
+
+
+def parse_new_player_args(args: list[str]):
+    """신규 이름 등급6개 포지션 → (이름, {항목:등급}, 1순위, 2순위). 형식이 안 맞으면 None.
+    구분자(/ · ,)는 토큰 사이 기호로 보고 나눈다. 뒤에서 포지션 2개(4글자), 그 앞에서 등급 6글자를 찾는다."""
+    toks = []
+    for a in args:
+        toks += [t for t in re.split(r"[/·,]", a) if t]
+    i = len(toks)
+    pos = ""
+    while i > 0 and len(pos) < 4 and re.fullmatch(r"[A-Za-z]+", toks[i - 1]):
+        pos = toks[i - 1] + pos
+        i -= 1
+    if len(pos) != 4:
+        return None
+    j = i
+    grade = ""
+    while j > 0 and len(grade) < 6 and re.fullmatch(r"[A-Za-z]+", toks[j - 1]):
+        grade = toks[j - 1] + grade
+        j -= 1
+    grade = grade.upper()
+    if len(grade) != 6 or any(c not in GRADE_CODES for c in grade):
+        return None
+    first, second = pos[:2].upper(), pos[2:].upper()
+    if first not in POSITION_CODES or second not in POSITION_CODES:
+        return None
+    name = " ".join(toks[:j]).strip()
+    if not _valid_grade_name(name):
+        return None
+    return name, dict(zip(ABILITY_KEYS, list(grade))), first, second
+
+
+def add_new_player(name: str, grades6: dict, first: str, second: str) -> str:
+    """신규 선수를 grades.json 과 positions.json 에 함께 추가하고 GitHub 에 커밋·푸시한다. 이미 있는 이름은 막는다."""
+    import subprocess
+    gpath = SQUAD_REPO / "grades.json"
+    ppath = SQUAD_REPO / "positions.json"
+    if not gpath.exists() or not ppath.exists():
+        raise PollError("등급/포지션 파일을 찾을 수 없어요", 500)
+    with SQUAD_LOCK:
+        pull_squad()
+        gdata = json.loads(gpath.read_text(encoding="utf-8"))
+        pdata = json.loads(ppath.read_text(encoding="utf-8"))
+        if name in gdata or name in pdata:
+            return f"❓ {name} 은(는) 이미 등록돼 있어요. 등급은 '등급', 포지션은 '포지션' 명령으로 바꿔 주세요."
+        gdata[name] = grades6
+        pdata[name] = [first, second]
+        gpath.write_text(json.dumps(gdata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        ppath.write_text(json.dumps(pdata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        def run(*args):
+            return subprocess.run(["git", *args], cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
+
+        run("add", "grades.json", "positions.json")
+        r = run("commit", "-m", f"신규 선수 등록: {name}")
+        if r.returncode != 0 and "nothing to commit" not in (r.stdout + r.stderr):
+            raise PollError(f"커밋 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
+        r = run("push", "origin", "HEAD")
+        if r.returncode != 0:
+            raise PollError(f"GitHub 푸시 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
+    return f"✅ 신규 {name} 등록 완료 (GitHub 반영)\n" + grade_text(name, grades6) + f"\n포지션: {first}/{second}"
 
 
 def make_squad(room: str) -> str:
@@ -800,7 +876,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "등급", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -943,9 +1019,19 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                  "(띄어쓰기·구분자 없이 STCB 도 가능 / 포지션: ST, CM, RB, LB, CB)")
         parsed = parse_position_args(args)
         if not parsed:
+            name = " ".join(args).strip()  # 이름만 쓰면 조회 (예: 포지션 김기항)
+            if args and not any(re.search(r"[A-Za-z]", a) for a in args) and _valid_grade_name(name):
+                return position_text(name), []
             return usage, []
         name, first, second = parsed
         return set_player_position(name, first, second), []
+
+    if cmd == "신규":  # 신규 김기항 BBCCBA ST/CB → 신규 선수를 등급·포지션과 함께 등록
+        parsed = parse_new_player_args(args)
+        if not parsed:
+            return NEW_USAGE, []
+        name, grades6, first, second = parsed
+        return add_new_player(name, grades6, first, second), []
 
     if cmd == "명단":  # weekenders-futsal 의 전체 명단
         return roster_text(), []
