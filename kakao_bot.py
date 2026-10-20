@@ -1176,9 +1176,9 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                 f"참석 {len(att)}명: {', '.join(att) if att else '-'}")
         if not att:
             return text, []
-        text += "\n\n⚽ 아래 버튼을 눌러 스쿼드를 만드세요."
-        btn = [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 팀짜기"}]
-        return text, btn
+        start_squad(poll, "auto")  # 마감과 동시에 팀을 백그라운드로 자동 구성 (버튼 없음)
+        text += "\n\n⚽ 팀을 자동으로 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."
+        return text, []
 
     if cmd == "투표조회":
         if args:  # 투표조회 2 → 2번 투표 상세
