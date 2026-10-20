@@ -793,7 +793,7 @@ def place_text(place: str) -> str:
         return f"📍 장소: {place}"
     from urllib.parse import quote
     map_url = f"https://map.kakao.com/?q={quote(info['addr'])}"
-    return (f"📍 장소: {place}\n🏠 주소: {info['addr']}\n🗺 지도: {map_url}\n"
+    return (f"📍 장소: {place}\n\n🏠 주소: {info['addr']}\n\n🗺 지도: {map_url}\n\n"
             f"🖼 사진: {SQUAD_URL}{info['img']}")
 
 
