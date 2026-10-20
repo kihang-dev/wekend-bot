@@ -626,15 +626,15 @@ def _em(s: str) -> int:
 
 
 GRADE_ABBR = {"패스": "패", "리턴": "리", "수비": "수", "드리블": "드", "볼소유": "볼", "골결정력": "골"}
-GRADE_LEGEND = "패=패스 리=리턴 수=수비 드=드리블 볼=볼소유 골=골결정력"
 
 
-def _grade_table_lines(names: list[str], gm) -> list[str]:
+def _grade_table_lines(names: list[str], gm, compact: bool = False) -> list[str]:
     """등급 표 줄 목록 (머리글 + 선수별 행). 전각 문자·공백으로 칸을 맞춘다."""
     keys = gm.ABILITY_KEYS
     SP = "\u3000"
     name_em = max([_em("이름")] + [_em(n) for n in names])
-    key_em = {k: _em(GRADE_ABBR.get(k, k)) for k in keys}
+    label = (lambda k: GRADE_ABBR.get(k, k)) if compact else (lambda k: k)
+    key_em = {k: _em(label(k)) for k in keys}
 
     def left(text: str, em: int) -> str:
         return text + SP * (em - _em(text))
@@ -644,7 +644,7 @@ def _grade_table_lines(names: list[str], gm) -> list[str]:
         lft = pad // 2
         return SP * lft + text + SP * (pad - lft)
 
-    lines = ["｜".join([left("이름", name_em)] + [GRADE_ABBR.get(k, k) for k in keys])]
+    lines = ["｜".join([left("이름", name_em)] + [label(k) for k in keys])]
     for n in names:
         ab = gm.PLAYER_ABILITIES[n]
         cells = [left(n, name_em)] + [center(_to_fullwidth(ab.get(k, "-")), key_em[k]) for k in keys]
@@ -657,7 +657,7 @@ def grades_table_text() -> str:
     pull_squad()
     gm = _load_squad_module("grades.py")
     names = sorted(gm.PLAYER_ABILITIES.keys(), key=lambda n: (-gm.player_score(n), n))
-    return f"📊 등급표 ({len(names)}명)\n{GRADE_LEGEND}\n" + "\n".join(_grade_table_lines(names, gm))
+    return f"📊 등급표 ({len(names)}명)\n" + "\n".join(_grade_table_lines(names, gm, compact=False))
 
 
 def grades_view_text(names: list[str]) -> str:
@@ -668,7 +668,7 @@ def grades_view_text(names: list[str]) -> str:
     missing = [n for n in names if n not in gm.PLAYER_ABILITIES]
     if not found:
         return f"❓ 등급 미등록: {', '.join(missing)}\n등록: 등급 이름 B B A A B B"
-    text = f"📊 등급 조회 ({len(found)}명)\n{GRADE_LEGEND}\n" + "\n".join(_grade_table_lines(found, gm))
+    text = f"📊 등급 조회 ({len(found)}명)\n" + "\n".join(_grade_table_lines(found, gm, compact=True))
     if missing:
         text += f"\n❓ 미등록: {', '.join(missing)}"
     return text
