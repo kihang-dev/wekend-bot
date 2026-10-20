@@ -606,35 +606,41 @@ def parse_grade_args(args: list[str]) -> tuple[str, str, dict | None]:
     return " ".join(args), "view", None
 
 
-def _display_width(s: str) -> int:
-    """한글·한자는 2칸, 영문·숫자·기호·공백은 1칸으로 센다 (머리글 기준 칸 맞춤용)."""
+def _to_fullwidth(s: str) -> str:
+    """영문·기호를 전각 문자로 바꾼다 (한글과 같은 폭으로 보이게)."""
+    return "".join(chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else c for c in s)
+
+
+def _em(s: str) -> int:
+    """한글·전각 문자 1글자 = 1em. 칸 맞춤 계산용."""
     import unicodedata
-    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+    return sum(1 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
 
 
 def grades_table_text() -> str:
-    """전체 등급표: 이름 | 6개 항목. 합계(점수) 높은 순. 머리글 폭에 맞춰 값을 가운데 정렬한다. grades.json 기준 (읽기만 함)."""
+    """전체 등급표: 이름 ｜ 6개 항목. 합계(점수) 높은 순. 전각 문자와 전각 공백으로 칸을 맞춘다. grades.json 기준 (읽기만 함)."""
     pull_squad()
     gm = _load_squad_module("grades.py")
     keys = gm.ABILITY_KEYS
     names = sorted(gm.PLAYER_ABILITIES.keys(), key=lambda n: (-gm.player_score(n), n))
-    name_w = max([_display_width("이름")] + [_display_width(n) for n in names])
-    key_w = {k: _display_width(k) for k in keys}
+    SP = "\u3000"  # 전각 공백 (1em)
+    name_em = max([_em("이름")] + [_em(n) for n in names])
+    key_em = {k: _em(k) for k in keys}
 
-    def center(text: str, w: int) -> str:
-        pad = w - _display_width(text)
-        left = pad // 2
-        return " " * left + text + " " * (pad - left)
+    def left(text: str, em: int) -> str:
+        return text + SP * (em - _em(text))
 
-    def left(text: str, w: int) -> str:
-        return text + " " * (w - _display_width(text))
+    def center(text: str, em: int) -> str:
+        pad = em - _em(text)
+        lft = pad // 2
+        return SP * lft + text + SP * (pad - lft)
 
-    header = " | ".join([left("이름", name_w)] + [k for k in keys])
+    header = "｜".join([left("이름", name_em)] + [k for k in keys])
     lines = [header]
     for n in names:
         ab = gm.PLAYER_ABILITIES[n]
-        cells = [left(n, name_w)] + [center(ab.get(k, "-"), key_w[k]) for k in keys]
-        lines.append(" | ".join(cells))
+        cells = [left(n, name_em)] + [center(_to_fullwidth(ab.get(k, "-")), key_em[k]) for k in keys]
+        lines.append("｜".join(cells))
     return f"📊 등급표 ({len(names)}명)\n" + "\n".join(lines)
 
 
