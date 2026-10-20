@@ -81,7 +81,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 스쿼드 — 스쿼드 페이지 링크
 · 스쿼드만들기 — 참석자로 팀을 새로 짜서 페이지에 반영
 · 명단 — 전체 명단 보기
-· 포지션 김기항 ST/LB — 선호 포지션 바꾸기 (GitHub 반영)"""
+· 포지션 김기항 ST/LB — 선호 포지션 바꾸기 (GitHub 반영)\n· 등급 김민규 — 등급 조회\n· 등급 김민규 수비 A — 항목 수정\n· 등급 김민규 B B A A B B — 6개 전체 등록 (GitHub 반영)"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
 def vote_buttons(poll: dict) -> list[dict]:
@@ -553,6 +553,72 @@ def set_player_position(name: str, first: str, second: str) -> str:
     return f"✅ {name} 선호 포지션을 {first}/{second}(으)로 바꾸고 GitHub에 올렸어요."
 
 
+ABILITY_KEYS = ["패스", "리턴", "수비", "드리블", "볼소유", "골결정력"]  # weekenders-futsal grades.py 와 같아야 함
+GRADE_CODES = {"A", "B", "C", "D"}
+GRADE_USAGE = ("사용법\n"
+               "· 등급 김민규 — 현재 등급 조회\n"
+               "· 등급 김민규 수비 A — 항목 하나만 수정\n"
+               "· 등급 김민규 B B A A B B — 6개 항목 전체 등록\n"
+               "  (순서: 패스 리턴 수비 드리블 볼소유 골결정력 / 등급: A B C D)")
+
+
+def parse_grade_args(args: list[str]) -> tuple[str, str, dict | None]:
+    """반환 (이름, 모드, 값). 모드: view(조회) / item(항목 수정) / all(전체 등록) / error.
+    뒤에서부터 본다: 뒤 6개가 등급이면 전체 등록, 뒤 2개가 '항목 등급'이면 항목 수정, 이름만 있으면 조회."""
+    def is_grade(tok: str) -> bool:
+        return tok.upper() in GRADE_CODES
+    if not args:
+        return "", "error", None
+    if len(args) >= 7 and all(is_grade(a) for a in args[-6:]):
+        return " ".join(args[:-6]), "all", dict(zip(ABILITY_KEYS, [a.upper() for a in args[-6:]]))
+    if len(args) >= 3 and args[-2] in ABILITY_KEYS and is_grade(args[-1]):
+        return " ".join(args[:-2]), "item", {args[-2]: args[-1].upper()}
+    if len(args) >= 2 and args[-1][:-1] in ABILITY_KEYS and is_grade(args[-1][-1:]):
+        return " ".join(args[:-1]), "item", {args[-1][:-1]: args[-1][-1:].upper()}
+    if any(is_grade(a) or a in ABILITY_KEYS for a in args[-6:]):
+        return "", "error", None  # 등급/항목 토큰이 있는데 형식이 안 맞음
+    return " ".join(args), "view", None
+
+
+def grade_text(name: str, abilities: dict) -> str:
+    parts = []
+    for k in ABILITY_KEYS:
+        parts.append(f"{k}{abilities[k]}" if k in abilities else f"{k}-(미입력·B기본)")
+    return f"⭐ {name} 등급\n" + " · ".join(parts)
+
+
+def set_player_grades(name: str, mode: str, changes: dict | None) -> str:
+    """grades.json 을 고치고 GitHub 에 커밋·푸시한다. view 는 조회만, item 은 입력 항목만, all 은 6개 전체를 바꾼다."""
+    import subprocess
+    path = SQUAD_REPO / "grades.json"
+    if not path.exists():
+        raise PollError(f"등급 파일을 찾을 수 없어요: {path}", 500)
+    with SQUAD_LOCK:
+        pull_squad()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if mode == "view":
+            if name not in data:
+                return f"❓ {name} 은(는) 등급 파일에 없어요. 등록: 등급 {name} B B A A B B"
+            return grade_text(name, data[name])
+        abilities = {} if mode == "all" else dict(data.get(name, {}))
+        abilities.update(changes or {})
+        data[name] = {k: abilities[k] for k in ABILITY_KEYS if k in abilities}
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        def run(*args):
+            return subprocess.run(["git", *args], cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
+
+        run("add", "grades.json")
+        r = run("commit", "-m", f"등급 변경: {name}")
+        if r.returncode != 0 and "nothing to commit" not in (r.stdout + r.stderr):
+            raise PollError(f"커밋 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
+        r = run("push", "origin", "HEAD")
+        if r.returncode != 0:
+            raise PollError(f"GitHub 푸시 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
+    what = "전체 등록" if mode == "all" else "항목 수정"
+    return f"✅ {name} {what} 완료 (GitHub 반영)\n" + grade_text(name, data[name])
+
+
 def make_squad(room: str) -> str:
     """스쿼드 구성은 외부 페이지에서 한다. 봇은 그 링크를 안내한다."""
     return f"스쿼드 구성 페이지\n{SQUAD_URL}"
@@ -717,7 +783,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "패치", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "등급", "패치", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -866,6 +932,12 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         if len(parts) != 2 or any(p not in POSITION_CODES for p in parts):
             return usage, []
         return set_player_position(name, parts[0], parts[1]), []
+
+    if cmd == "등급":  # 등급 조회 / 등급 김민규 수비 A / 등급 김민규 B B A A B B
+        name, mode, changes = parse_grade_args(args)
+        if mode == "error":
+            return GRADE_USAGE, []
+        return set_player_grades(name, mode, changes), []
 
     if cmd == "명단":  # weekenders-futsal 의 전체 명단
         return roster_text(), []
