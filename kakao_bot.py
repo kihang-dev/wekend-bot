@@ -617,20 +617,20 @@ def _pad(s: str, width: int) -> str:
 
 
 def grades_table_text() -> str:
-    """전체 등급표: 이름 | 6개 항목 | 합계. 합계 높은 순, 열을 공백으로 맞춘다. grades.json 기준 (읽기만 함)."""
+    """전체 등급표: 이름 | 6개 항목. 합계(점수) 높은 순, 열을 공백으로 맞춘다. grades.json 기준 (읽기만 함)."""
     pull_squad()
     gm = _load_squad_module("grades.py")
     keys = gm.ABILITY_KEYS
     names = sorted(gm.PLAYER_ABILITIES.keys(), key=lambda n: (-gm.player_score(n), n))
-    header = ["이름"] + keys + ["합계"]
+    header = ["이름"] + keys
     rows = []
     for n in names:
         ab = gm.PLAYER_ABILITIES[n]
-        rows.append([n] + [ab.get(k, "-") for k in keys] + [str(gm.player_score(n))])
+        rows.append([n] + [ab.get(k, "-") for k in keys])
     widths = [max(_display_width(r[i]) for r in [header] + rows) for i in range(len(header))]
 
     def line(cells):
-        return " | ".join(_pad(c, widths[i]) for i, c in enumerate(cells))
+        return " | ".join(_pad(c, widths[i]) for i, c in enumerate(cells)).rstrip()
 
     body = [line(header)] + [line(r) for r in rows]
     return f"📊 등급표 ({len(names)}명)\n" + "\n".join(body)
