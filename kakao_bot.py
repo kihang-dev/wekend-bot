@@ -562,20 +562,43 @@ GRADE_USAGE = ("사용법\n"
                "  (순서: 패스 리턴 수비 드리블 볼소유 골결정력 / 등급: A B C D)")
 
 
+def _valid_grade_name(name: str) -> bool:
+    """이름은 한글/영문 1~3단어, 12자 이하만 허용. 기호·구분자가 섞이면 저장하지 않는다."""
+    import re
+    if any(k in name for k in ABILITY_KEYS):
+        return False  # 항목 이름이 섞인 입력 (예: 김기항패스A)
+    return bool(name) and len(name) <= 12 and re.fullmatch(r"[가-힣A-Za-z]+( [가-힣A-Za-z]+){0,2}", name) is not None
+
+
 def parse_grade_args(args: list[str]) -> tuple[str, str, dict | None]:
     """반환 (이름, 모드, 값). 모드: view(조회) / item(항목 수정) / all(전체 등록) / error.
-    뒤에서부터 본다: 뒤 6개가 등급이면 전체 등록, 뒤 2개가 '항목 등급'이면 항목 수정, 이름만 있으면 조회."""
+    구분자(·,)는 무시. 뒤 6개가 등급이면 전체 등록. 뒤에서부터 '항목 등급' 또는 '항목등급' 쌍을 모아 항목 수정.
+    아무 항목도 없으면 이름만으로 조회."""
     def is_grade(tok: str) -> bool:
         return tok.upper() in GRADE_CODES
+    def is_glued(tok: str) -> bool:
+        return len(tok) >= 2 and tok[:-1] in ABILITY_KEYS and is_grade(tok[-1:])
+    args = [a for a in args if a not in ("·", ",", "/")]
     if not args:
         return "", "error", None
     if len(args) >= 7 and all(is_grade(a) for a in args[-6:]):
         return " ".join(args[:-6]), "all", dict(zip(ABILITY_KEYS, [a.upper() for a in args[-6:]]))
-    if len(args) >= 3 and args[-2] in ABILITY_KEYS and is_grade(args[-1]):
-        return " ".join(args[:-2]), "item", {args[-2]: args[-1].upper()}
-    if len(args) >= 2 and args[-1][:-1] in ABILITY_KEYS and is_grade(args[-1][-1:]):
-        return " ".join(args[:-1]), "item", {args[-1][:-1]: args[-1][-1:].upper()}
-    if any(is_grade(a) or a in ABILITY_KEYS for a in args[-6:]):
+    changes, i = {}, len(args)
+    while i > 0:
+        tok = args[i - 1]
+        if is_glued(tok):
+            changes.setdefault(tok[:-1], tok[-1:].upper()); i -= 1
+        elif i >= 2 and args[i - 2] in ABILITY_KEYS and is_grade(tok):
+            changes.setdefault(args[i - 2], tok.upper()); i -= 2
+        else:
+            break
+    name_tokens = args[:i]
+    if changes:
+        # 이름 쪽에 항목/등급 토큰이 섞여 있으면 잘못된 입력 (예: '김기항 패스A 리턴A')
+        if not name_tokens or any(t in ABILITY_KEYS or is_grade(t) or is_glued(t) for t in name_tokens):
+            return "", "error", None
+        return " ".join(name_tokens), "item", changes
+    if any(is_grade(a) or a in ABILITY_KEYS or is_glued(a) for a in args[-6:]):
         return "", "error", None  # 등급/항목 토큰이 있는데 형식이 안 맞음
     return " ".join(args), "view", None
 
@@ -935,7 +958,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
 
     if cmd == "등급":  # 등급 조회 / 등급 김민규 수비 A / 등급 김민규 B B A A B B
         name, mode, changes = parse_grade_args(args)
-        if mode == "error":
+        if mode == "error" or not _valid_grade_name(name):
             return GRADE_USAGE, []
         return set_player_grades(name, mode, changes), []
 
