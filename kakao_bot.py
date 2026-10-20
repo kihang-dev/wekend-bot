@@ -63,15 +63,15 @@ HELP_TEXT = """📖 위켄봇 사용법
 [투표]
 · 투표 — 진행중인 투표 보기
 · 참석 / 불참 — 최근 투표에 응답
-· 용병 홍길동 — 최근 투표에 용병 추가 (마감 후에도 가능)
+· 용병 홍길동 — 최근 투표에 용병 추가 (마감 후면 팀 자동 재구성)
 · 멤버 — 최근 투표 참석 멤버 보기 (마감 후)
 ※ 마감: 다음 주 수요일 23:00
 
 [관리]
-· 참석 홍길동 / 불참 홍길동 — 참석·불참 바꾸기 (마감 후에도 가능)
+· 참석 홍길동 / 불참 홍길동 — 참석·불참 바꾸기 (마감 후면 팀 자동 재구성)
 · 장소 달월 — 장소 바꾸기
 · 날짜 261031 — 날짜 바꾸기
-· 멤버 김기항 김민규 — 김기항 불참, 김민규 참석
+· 멤버 김기항 김민규 — 김기항 불참, 김민규 참석 (마감 후면 팀 자동 재구성)
 · 투표종료 — 지금 마감
 · 투표삭제 — 투표 삭제
 · 투표조회 — 투표 목록
@@ -101,6 +101,14 @@ def squad_buttons(poll: dict, now: datetime | None) -> list[dict]:
     if not is_closed(poll, now):
         return []
     return [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 팀짜기"}]
+
+
+def _regen_or_card(poll: dict, now: datetime | None, text: str, regen: bool) -> tuple[str, list]:
+    """마감된 투표의 참석자가 바뀌었으면 팀을 백그라운드로 자동 재구성한다 (버튼 없음). 진행 중이면 투표 카드."""
+    if regen and is_closed(poll, now):
+        start_squad(poll, "auto")
+        return f"{text}\n⚽ 팀을 자동으로 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.", []
+    return poll_reply(poll, now, text)
 
 
 SIDES = {"참석": "attend", "불참": "absent"}
@@ -1022,7 +1030,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             # 관리자: 참석 김기항 / 불참 김기항 → 그 사람의 참석·불참을 바꾼다 (마감 후에도 가능)
             target = " ".join(args).strip('"')
             poll = set_attendance(room, target, SIDES[cmd])
-            return poll_reply(poll, now, f"{target}님을 {cmd}으로 바꿨어요.")
+            return _regen_or_card(poll, now, f"{target}님을 {cmd}으로 바꿨어요.", True)
         polls = load_polls()
         pid = None
         if args and (args[0].startswith("#") or args[0].isdigit()):  # "참석 2" 또는 버튼의 "참석 #2"
@@ -1153,7 +1161,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             lines.append(f"용병 {', '.join(added)}님을 '{poll['title']}' 참석자에 추가했어요.")
         if skipped:
             lines.append(f"이미 명단에 있어요: {', '.join(skipped)}")
-        return poll_reply(poll, now, "\n".join(lines))
+        return _regen_or_card(poll, now, "\n".join(lines), bool(added))
 
     if cmd == "투표종료":
         no = _parse_no(args[0]) if args else None
