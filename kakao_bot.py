@@ -808,16 +808,26 @@ def latest_poll_any_room() -> dict | None:
     return max(all_polls, key=_created)
 
 
+NOTICE_TIME_RULES = (
+    "⏰ 경기 시간: 08:00~10:00\n"
+    "- 지각 체크: 08시 01분부터\n"
+    "- 노쇼: 경기 시작 후 1시간 경과 시점부터"
+)
+
+
 def make_squad(room: str) -> str:
-    """스쿼드 구성은 외부 페이지에서 한다. 봇은 그 링크와 가장 최근 투표의 장소 정보를 안내한다."""
-    text = f"스쿼드 구성 페이지\n{SQUAD_URL}"
+    """스쿼드 응답 = 주간 공지 (장소·주소·지도·사진 + 시간·규칙 + 스쿼드 링크). 장소는 가장 최근 투표 기준."""
     try:
         poll = latest_poll_any_room()
     except Exception:
-        return text
-    if not poll:
-        return text
-    return text + "\n\n" + place_text(poll["place"])
+        poll = None
+    parts = ["📢 이번 주 풋살 공지"]
+    if poll:
+        parts.append(place_text(poll["place"]))
+    parts.append(NOTICE_TIME_RULES)
+    parts.append(f"👥 스쿼드 구성 페이지: {SQUAD_URL}")
+    parts.append("다들 늦지 않게 와주세요!")
+    return "\n\n".join(parts)
 
 
 def build_squad_html(members: list[str], game_mode: str = "auto") -> None:
