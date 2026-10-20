@@ -581,6 +581,12 @@ def parse_grade_args(args: list[str]) -> tuple[str, str, dict | None]:
     args = [a for a in args if a not in ("·", ",", "/")]
     if not args:
         return "", "error", None
+    # 붙여 쓴 6글자 등급 (예: BBCCBA) → 공백으로 풀어서 전체 등록으로 처리
+    if len(args) >= 2 and re.fullmatch(r"[ABCDabcd]{6}", args[-1]):
+        args = args[:-1] + list(args[-1].upper())
+    # A~D 글자만 여러 개 붙은 토큰(예: BBCC)은 형식 오류
+    if any(re.fullmatch(r"[A-Z]{2,}", a) for a in args):  # 영문 대문자만 붙은 토큰은 등급 형식 오류
+        return "", "error", None
     if len(args) >= 7 and all(is_grade(a) for a in args[-6:]):
         return " ".join(args[:-6]), "all", dict(zip(ABILITY_KEYS, [a.upper() for a in args[-6:]]))
     changes, i = {}, len(args)
