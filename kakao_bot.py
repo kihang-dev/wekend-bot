@@ -494,27 +494,16 @@ def request_patch(user_key: str, now: datetime | None) -> str:
     return "📎 패치 파일(.patch / .diff / .txt)을 이 방에 올려 주세요. (1개만 저장돼요)"
 
 
-def _find_url(obj) -> str | None:
-    """메시지 데이터 안에서 첫 번째 http 주소를 찾는다 (첨부 파일 주소)."""
-    if isinstance(obj, str):
-        return obj if obj.startswith("http") else None
-    items = obj.values() if isinstance(obj, dict) else obj if isinstance(obj, list) else []
-    for v in items:
-        u = _find_url(v)
-        if u:
-            return u
-    return None
-
-
-def save_patch_file(user_key: str, d: dict, now: datetime | None) -> str | None:
-    """'패치' 요청 뒤 올라온 파일을 PATCH_DIR 에 저장만 한다 (적용·실행 없음). 기다리는 중이 아니면 None."""
+def save_patch_file(user_key: str, url: str, now: datetime | None) -> str | None:
+    """'패치' 요청 뒤 올라온 파일(카카오 파일 주소)을 PATCH_DIR 에 저장만 한다 (적용·실행 없음)."""
+    from urllib.parse import urlparse
     now = now or now_kst()
     if user_key not in PENDING_PATCH:
         return None
     PENDING_PATCH.discard(user_key)  # 파일 1개만 받고 대기 해제
-    url = _find_url(d)
-    if not url:
-        return "파일 주소를 찾지 못했어요. 로그의 RAW 줄을 확인해 주세요."
+    ext = Path(urlparse(url).path).suffix.lower()
+    if ext not in PATCH_EXTS:
+        return f"패치 파일({', '.join(PATCH_EXTS)})만 올릴 수 있어요. 다시 @위켄봇 패치 를 보내 주세요."
     import httpx
     try:
         r = httpx.get(url, timeout=30, follow_redirects=True)
@@ -524,7 +513,7 @@ def save_patch_file(user_key: str, d: dict, now: datetime | None) -> str | None:
     if len(r.content) > PATCH_MAX_BYTES:
         return "파일이 너무 커요. 2MB 이하로 올려 주세요."
     PATCH_DIR.mkdir(parents=True, exist_ok=True)
-    path = PATCH_DIR / f"patch_{now:%Y%m%d_%H%M%S}.patch"  # 파일 이름은 봇이 정한다 (사용자 입력 사용 안 함)
+    path = PATCH_DIR / f"patch_{now:%Y%m%d_%H%M%S}{ext}"  # 파일 이름은 봇이 정한다 (사용자 입력 사용 안 함)
     path.write_bytes(r.content)
     lines = r.content.decode("utf-8", "replace").count("\n")
     return f"📎 패치 파일을 저장했어요: {path} (약 {lines}줄)\n적용은 Mac에서 직접 진행해 주세요."
@@ -1285,8 +1274,9 @@ async def run_gateway(websockets, token: str, stop: asyncio.Event) -> None:
                 print(f"RECV {user_key[-6:]}: {content}")
                 result = None
                 try:
-                    if not (content or "").strip() and user_key in PENDING_PATCH:  # 패치 대기 중 파일이 올라옴
-                        file_text = await asyncio.to_thread(save_patch_file, user_key, d, now_kst())
+                    text_in = (content or "").strip()
+                    if user_key in PENDING_PATCH and text_in.startswith("http"):  # 패치 대기 중 파일 주소가 올라옴
+                        file_text = await asyncio.to_thread(save_patch_file, user_key, text_in, now_kst())
                         if file_text:
                             result = (file_text, [])
                     if result is None:
