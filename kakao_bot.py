@@ -64,7 +64,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 투표 — 진행중인 투표 보기
 · 참석 / 불참 — 최근 투표에 응답
 · 용병 홍길동 — 최근 투표에 용병 추가 (마감 후면 팀 자동 재구성)
-· 멤버 — 최근 투표 참석 멤버 보기 (마감 후)
+· 멤버 — 최근 투표 참석·불참 멤버 보기 (진행중·마감 모두)
 ※ 마감: 다음 주 수요일 23:00
 
 [관리]
@@ -1059,12 +1059,14 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             poll = get_poll_no(room, _parse_no(args[0]))
         else:
             poll = get_poll(room)
-        if not is_closed(poll, now):  # 진행중에는 명단을 보여주지 않는다 (마감 또는 투표완료 후에만)
-            return (f"🗳 {poll['no']}번 · {poll['title']}\n"
-                    "아직 투표가 진행중이에요. 마감 후 또는 투표완료 후에 멤버를 볼 수 있어요."), []
         att = list(poll["attend"].values())
+        absn = list(poll["absent"].values())
+        status = "마감" if is_closed(poll, now) else "진행중"
         body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "참석자가 없어요."
-        return f"🗳 {poll['no']}번 · {poll['title']} (마감)\n참석 {len(att)}명\n{body}", []
+        abody = ", ".join(absn) if absn else "-"
+        return (f"🗳 {poll['no']}번 · {poll['title']} ({status})\n"
+                f"참석 {len(att)}명\n{body}\n"
+                f"불참 {len(absn)}명: {abody}"), []
 
     if cmd == "포지션":  # 포지션 김기항 ST/CB (ST CB, STCB, ST·CB, stcb 등 모두 가능)
         usage = ("사용법: 포지션 이름 1순위/2순위\n"
