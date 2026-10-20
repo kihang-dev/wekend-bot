@@ -606,22 +606,34 @@ def parse_grade_args(args: list[str]) -> tuple[str, str, dict | None]:
     return " ".join(args), "view", None
 
 
+def _display_width(s: str) -> int:
+    """한글·한자 등 전각 문자는 2칸, 나머지는 1칸으로 셈 (줄 맞춤용)."""
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+
+
+def _pad(s: str, width: int) -> str:
+    return s + " " * (width - _display_width(s))
+
+
 def grades_table_text() -> str:
-    """전체 등급표: 이름 | 6개 항목 | 합계 | 등급. 합계 높은 순. grades.json 기준 (읽기만 함)."""
+    """전체 등급표: 이름 | 6개 항목 | 합계. 합계 높은 순, 열을 공백으로 맞춘다. grades.json 기준 (읽기만 함)."""
     pull_squad()
     gm = _load_squad_module("grades.py")
     keys = gm.ABILITY_KEYS
-    max_score = len(keys) * 4
     names = sorted(gm.PLAYER_ABILITIES.keys(), key=lambda n: (-gm.player_score(n), n))
-    lines = [f"이름 | {' '.join(keys)} | 합계 | 등급"]
+    header = ["이름"] + keys + ["합계"]
+    rows = []
     for n in names:
         ab = gm.PLAYER_ABILITIES[n]
-        vals = " ".join(ab.get(k, "-") for k in keys)
-        s = gm.player_score(n)
-        r = s / max_score
-        g = "A" if r >= 0.80 else "B" if r >= 0.60 else "C" if r >= 0.40 else "D"
-        lines.append(f"{n} | {vals} | {s} | {g}")
-    return f"📊 등급표 ({len(names)}명)\n" + "\n".join(lines)
+        rows.append([n] + [ab.get(k, "-") for k in keys] + [str(gm.player_score(n))])
+    widths = [max(_display_width(r[i]) for r in [header] + rows) for i in range(len(header))]
+
+    def line(cells):
+        return " | ".join(_pad(c, widths[i]) for i, c in enumerate(cells))
+
+    body = [line(header)] + [line(r) for r in rows]
+    return f"📊 등급표 ({len(names)}명)\n" + "\n".join(body)
 
 
 def grade_text(name: str, abilities: dict) -> str:
