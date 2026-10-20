@@ -1130,10 +1130,14 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                 return "사용법: 멤버 [불참할 이름] [참석할 이름]\n예) 멤버 김기항 김민규", []
             set_attendance(room, sub_args[0], SIDES["불참"], no=no)
             poll = set_attendance(room, sub_args[1], SIDES["참석"], no=no)
+            if is_closed(poll, now):  # 마감된 투표의 참석자가 바뀌면 팀을 자동으로 다시 짠다 (버튼 없음)
+                start_squad(poll, "auto")
+                return (f"{sub_args[0]}님을 불참, {sub_args[1]}님을 참석으로 바꿨어요.\n"
+                        "⚽ 팀을 자동으로 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."), []
             return poll_reply(poll, now, f"{sub_args[0]}님을 불참, {sub_args[1]}님을 참석으로 바꿨어요.")
         else:
             return "수정할 항목은 장소 / 날짜 / 멤버 중 하나예요.", []
-        return f"{poll['no']}번 투표를 수정했어요.\n{poll_summary(poll)}", squad_buttons(poll, now)
+        return f"{poll['no']}번 투표를 수정했어요.\n{poll_summary(poll)}", []
 
     if cmd == "용병":
         try:  # 띄어쓰기가 있는 닉네임은 따옴표로 묶는다: 용병 261017 "홍 길동" 김철수
