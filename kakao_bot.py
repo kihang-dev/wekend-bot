@@ -799,7 +799,10 @@ def latest_poll_any_room() -> dict | None:
     all_polls = [p for lst in load_polls().values() for p in (lst or [])]
     if not all_polls:
         return None
-    return max(all_polls, key=lambda p: datetime.fromisoformat(p["created"]))
+    def _created(p: dict) -> datetime:
+        c = p.get("created")  # 예전 투표는 created 가 비어 있을 수 있다 → 가장 오래된 것으로 취급
+        return datetime.fromisoformat(c) if c else datetime.min.replace(tzinfo=KST)
+    return max(all_polls, key=_created)
 
 
 def make_squad(room: str) -> str:
