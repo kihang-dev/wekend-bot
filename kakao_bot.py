@@ -80,7 +80,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 스쿼드 — 스쿼드 페이지 링크
 · 스쿼드만들기 — 참석자로 팀을 새로 짜서 페이지에 반영
 · 명단 — 전체 명단 보기
-· 포지션 김기항 ST/LB — 선호 포지션 바꾸기 (GitHub 반영)\n· 등급 김민규 — 등급 조회\n· 등급 김민규 수비 A — 항목 수정\n· 등급 김민규 B B A A B B — 6개 전체 등록 (GitHub 반영)\n· 신규 김민규 BBCCBA ST/CB — 신규 선수 등록 (등급+포지션)"""
+· 포지션 김기항 ST/LB — 선호 포지션 바꾸기 (GitHub 반영)\n· 등급 — 전체 등급표\n· 등급 김민규 — 등급 조회\n· 등급 김민규 수비 A — 항목 수정\n· 등급 김민규 B B A A B B — 6개 전체 등록 (GitHub 반영)\n· 신규 김민규 BBCCBA ST/CB — 신규 선수 등록 (등급+포지션)"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
 def vote_buttons(poll: dict) -> list[dict]:
@@ -485,8 +485,8 @@ def roster_text() -> str:
     for i, n in enumerate(names, 1):
         pos = positions.get(n)
         pos_text = " / ".join(pos) if pos else "-"
-        lines.append(f"{i}. {n} · {grade_of(n)} · {pos_text}")
-    return f"👥 전체 명단 ({len(names)}명)\n(이름 · 등급 · 포지션 1순위/2순위)\n" + "\n".join(lines)
+        lines.append(f"{i}. {n} · {pos_text}")
+    return f"👥 전체 명단 ({len(names)}명)\n(이름 · 포지션 1순위/2순위)\n" + "\n".join(lines)
 
 
 POSITION_CODES = {"ST", "CM", "RB", "LB", "CB"}
@@ -604,6 +604,24 @@ def parse_grade_args(args: list[str]) -> tuple[str, str, dict | None]:
     if any(is_grade(a) or a in ABILITY_KEYS or is_glued(a) for a in args[-6:]):
         return "", "error", None  # 등급/항목 토큰이 있는데 형식이 안 맞음
     return " ".join(args), "view", None
+
+
+def grades_table_text() -> str:
+    """전체 등급표: 이름 | 6개 항목 | 합계 | 등급. 합계 높은 순. grades.json 기준 (읽기만 함)."""
+    pull_squad()
+    gm = _load_squad_module("grades.py")
+    keys = gm.ABILITY_KEYS
+    max_score = len(keys) * 4
+    names = sorted(gm.PLAYER_ABILITIES.keys(), key=lambda n: (-gm.player_score(n), n))
+    lines = [f"이름 | {' '.join(keys)} | 합계 | 등급"]
+    for n in names:
+        ab = gm.PLAYER_ABILITIES[n]
+        vals = " ".join(ab.get(k, "-") for k in keys)
+        s = gm.player_score(n)
+        r = s / max_score
+        g = "A" if r >= 0.80 else "B" if r >= 0.60 else "C" if r >= 0.40 else "D"
+        lines.append(f"{n} | {vals} | {s} | {g}")
+    return f"📊 등급표 ({len(names)}명)\n" + "\n".join(lines)
 
 
 def grade_text(name: str, abilities: dict) -> str:
@@ -1032,6 +1050,15 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return NEW_USAGE, []
         name, grades6, first, second = parsed
         return add_new_player(name, grades6, first, second), []
+
+    if cmd == "등급":  # 등급 → 전체 등급표 / 등급 김민규 → 조회 / 등급 김민규 수비 A / 등급 김민규 B B A A B B
+        args = [a for a in args if a != "등급"]  # 입력에 '등급' 단어가 섞여도 무시
+        if not args:
+            return grades_table_text(), []
+        name, mode, changes = parse_grade_args(args)
+        if mode == "error":
+            return GRADE_USAGE, []
+        return set_player_grades(name, mode, changes), []
 
     if cmd == "명단":  # weekenders-futsal 의 전체 명단
         return roster_text(), []
