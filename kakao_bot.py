@@ -780,9 +780,28 @@ def add_new_player(name: str, grades6: dict, first: str, second: str) -> str:
     return f"✅ 신규 {name} 등록 완료 (GitHub 반영)\n" + grade_text(name, grades6) + f"\n포지션: {first}/{second}"
 
 
+# 장소별 주소와 사진 (사진은 /var/www/squad 에 올려 둔 파일)
+PLACE_INFO = {
+    "달월": {"addr": "경기 시흥시 월곶동 956-15", "img": "dalwol.jpeg"},
+    "월곶": {"addr": "경기도 시흥시 월곶동 520-256", "img": "wolgot.png"},
+}
+
+
+def place_text(place: str) -> str:
+    info = PLACE_INFO.get(place)
+    if not info:
+        return f"📍 장소: {place}"
+    return f"📍 장소: {place}\n🏠 주소: {info['addr']}\n🗺 사진: {SQUAD_URL}{info['img']}"
+
+
 def make_squad(room: str) -> str:
-    """스쿼드 구성은 외부 페이지에서 한다. 봇은 그 링크를 안내한다."""
-    return f"스쿼드 구성 페이지\n{SQUAD_URL}"
+    """스쿼드 구성은 외부 페이지에서 한다. 봇은 그 링크와 최근 투표 장소 정보를 안내한다."""
+    text = f"스쿼드 구성 페이지\n{SQUAD_URL}"
+    try:
+        poll = get_poll(room)
+    except Exception:
+        return text
+    return text + "\n\n" + place_text(poll["place"])
 
 
 def build_squad_html(members: list[str], game_mode: str = "auto") -> None:
