@@ -794,12 +794,22 @@ def place_text(place: str) -> str:
     return f"📍 장소: {place}\n🏠 주소: {info['addr']}\n🗺 사진: {SQUAD_URL}{info['img']}"
 
 
+def latest_poll_any_room() -> dict | None:
+    """방과 상관없이 가장 최근에 만든 투표 (일반채팅방에서 스쿼드를 해도 장소를 가져온다)."""
+    all_polls = [p for lst in load_polls().values() for p in (lst or [])]
+    if not all_polls:
+        return None
+    return max(all_polls, key=lambda p: datetime.fromisoformat(p["created"]))
+
+
 def make_squad(room: str) -> str:
-    """스쿼드 구성은 외부 페이지에서 한다. 봇은 그 링크와 최근 투표 장소 정보를 안내한다."""
+    """스쿼드 구성은 외부 페이지에서 한다. 봇은 그 링크와 가장 최근 투표의 장소 정보를 안내한다."""
     text = f"스쿼드 구성 페이지\n{SQUAD_URL}"
     try:
-        poll = get_poll(room)
+        poll = latest_poll_any_room()
     except Exception:
+        return text
+    if not poll:
         return text
     return text + "\n\n" + place_text(poll["place"])
 
