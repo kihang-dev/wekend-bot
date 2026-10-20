@@ -821,11 +821,10 @@ def make_squad(room: str) -> str:
         poll = latest_poll_any_room()
     except Exception:
         poll = None
-    parts = ["📢 이번 주 풋살 공지"]
+    parts = ["📢 이번 주 풋살 공지", f"👥 스쿼드 구성 페이지: {SQUAD_URL}"]
     if poll:
         parts.append(place_text(poll["place"]))
     parts.append(NOTICE_TIME_RULES)
-    parts.append(f"👥 스쿼드 구성 페이지: {SQUAD_URL}")
     parts.append("다들 늦지 않게 와주세요!")
     return "\n\n".join(parts)
 
