@@ -75,7 +75,6 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 투표종료 — 지금 마감
 · 투표삭제 — 투표 삭제
 · 투표조회 — 투표 목록
-· 패치 — 패치 파일 1개 올리기 (서버에 저장만 함)
 
 [스쿼드]
 · 스쿼드 — 스쿼드 페이지 링크
@@ -467,56 +466,27 @@ def _load_squad_module(filename: str):
 
 
 def roster_text() -> str:
-    """전체 명단: 이름 · 등급 · 선호 포지션. 등급 높은 순으로 보여 준다. 조회 전에 레포를 최신으로 받는다."""
+    """전체 명단: 이름 · 등급 · 선호 포지션. 등급은 능력치 합산(grades.py) 기준, 높은 순. 조회 전에 레포를 최신으로 받는다."""
     pull_squad()
     positions = _load_squad_module("positions.py").PLAYER_POSITIONS
-    grades = _load_squad_module("grades.py").PLAYER_GRADES
-    order = ["A+", "A", "B+", "B", "C", "D"]
-    names = list(positions) + [n for n in grades if n not in positions]
-    names.sort(key=lambda n: (order.index(grades[n]) if grades.get(n) in order else len(order), n))
+    grades_mod = _load_squad_module("grades.py")
+    abilities = grades_mod.PLAYER_ABILITIES
+    max_score = len(grades_mod.ABILITY_KEYS) * 4  # 항목 수 × A(4점)
+
+    def grade_of(n: str) -> str:
+        if n not in abilities:
+            return "-"  # 등급 미등록
+        r = grades_mod.player_score(n) / max_score
+        return "A" if r >= 0.80 else "B" if r >= 0.60 else "C" if r >= 0.40 else "D"
+
+    names = list(positions) + [n for n in abilities if n not in positions]
+    names.sort(key=lambda n: (-grades_mod.player_score(n), n))
     lines = []
     for i, n in enumerate(names, 1):
-        grade = grades.get(n, "-")
         pos = positions.get(n)
         pos_text = " / ".join(pos) if pos else "-"
-        lines.append(f"{i}. {n} · {grade} · {pos_text}")
+        lines.append(f"{i}. {n} · {grade_of(n)} · {pos_text}")
     return f"👥 전체 명단 ({len(names)}명)\n(이름 · 등급 · 포지션 1순위/2순위)\n" + "\n".join(lines)
-
-
-PATCH_DIR = Path(os.environ.get("PATCH_DIR", "/home/rlgkdqkd/patch"))  # 올린 패치 파일 저장 폴더 (적용은 하지 않음)
-PATCH_MAX_BYTES = 2 * 1024 * 1024
-PATCH_EXTS = (".patch", ".diff", ".txt")
-PENDING_PATCH: set[str] = set()  # 파일을 기다리는 관리자 (파일 1개를 받으면 해제)
-
-
-def request_patch(user_key: str, now: datetime | None) -> str:
-    PENDING_PATCH.add(user_key)
-    return "📎 패치 파일(.patch / .diff / .txt)을 이 방에 올려 주세요. (1개만 저장돼요)"
-
-
-def save_patch_file(user_key: str, url: str, now: datetime | None) -> str | None:
-    """'패치' 요청 뒤 올라온 파일(카카오 파일 주소)을 PATCH_DIR 에 저장만 한다 (적용·실행 없음)."""
-    from urllib.parse import urlparse
-    now = now or now_kst()
-    if user_key not in PENDING_PATCH:
-        return None
-    PENDING_PATCH.discard(user_key)  # 파일 1개만 받고 대기 해제
-    ext = Path(urlparse(url).path).suffix.lower()
-    if ext not in PATCH_EXTS:
-        return f"패치 파일({', '.join(PATCH_EXTS)})만 올릴 수 있어요. 다시 @위켄봇 패치 를 보내 주세요."
-    import httpx
-    try:
-        r = httpx.get(url, timeout=30, follow_redirects=True)
-        r.raise_for_status()
-    except Exception as e:
-        return f"파일을 받지 못했어요: {e!r}"[:200]
-    if len(r.content) > PATCH_MAX_BYTES:
-        return "파일이 너무 커요. 2MB 이하로 올려 주세요."
-    PATCH_DIR.mkdir(parents=True, exist_ok=True)
-    path = PATCH_DIR / f"patch_{now:%Y%m%d_%H%M%S}{ext}"  # 파일 이름은 봇이 정한다 (사용자 입력 사용 안 함)
-    path.write_bytes(r.content)
-    lines = r.content.decode("utf-8", "replace").count("\n")
-    return f"📎 패치 파일을 저장했어요: {path} (약 {lines}줄)\n적용은 Mac에서 직접 진행해 주세요."
 
 
 POSITION_CODES = {"ST", "CM", "RB", "LB", "CB"}
@@ -830,7 +800,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "등급", "패치", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "스쿼드만들기", "명단", "포지션", "등급", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -966,9 +936,6 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         att = list(poll["attend"].values())
         body = "\n".join(f"{i}. {n}" for i, n in enumerate(att, 1)) or "참석자가 없어요."
         return f"🗳 {poll['no']}번 · {poll['title']} (마감)\n참석 {len(att)}명\n{body}", []
-
-    if cmd == "패치":  # 관리자: 패치 파일을 올리면 서버 patch 폴더에 저장만 한다
-        return request_patch(user_key, now), []
 
     if cmd == "포지션":  # 포지션 김기항 ST/CB (ST CB, STCB, ST·CB, stcb 등 모두 가능)
         usage = ("사용법: 포지션 이름 1순위/2순위\n"
@@ -1387,14 +1354,8 @@ async def run_gateway(websockets, token: str, stop: asyncio.Event) -> None:
                 print(f"RECV {user_key[-6:]}: {content}")
                 result = None
                 try:
-                    text_in = (content or "").strip()
-                    if user_key in PENDING_PATCH and text_in.startswith("http"):  # 패치 대기 중 파일 주소가 올라옴
-                        file_text = await asyncio.to_thread(save_patch_file, user_key, text_in, now_kst())
-                        if file_text:
-                            result = (file_text, [])
-                    if result is None:
-                        # 팀짜기처럼 오래 걸리는 작업(git push 등)이 연결 유지를 막지 않도록 별도 스레드에서 처리
-                        result = await asyncio.to_thread(handle, content or "", user_key, room)
+                    # 팀짜기처럼 오래 걸리는 작업(git push 등)이 연결 유지를 막지 않도록 별도 스레드에서 처리
+                    result = await asyncio.to_thread(handle, content or "", user_key, room)
                 except Exception as e:  # 명령 처리 오류가 봇 전체를 멈추지 않도록
                     print("ERROR:", repr(e))
                     result = ("처리 중 오류가 발생했어요.", [])
