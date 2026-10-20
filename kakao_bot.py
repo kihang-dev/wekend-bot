@@ -625,13 +625,10 @@ def _em(s: str) -> int:
     return sum(1 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
 
 
-def grades_table_text() -> str:
-    """전체 등급표: 이름 ｜ 6개 항목. 합계(점수) 높은 순. 전각 문자와 전각 공백으로 칸을 맞춘다. grades.json 기준 (읽기만 함)."""
-    pull_squad()
-    gm = _load_squad_module("grades.py")
+def _grade_table_lines(names: list[str], gm) -> list[str]:
+    """등급 표 줄 목록 (머리글 + 선수별 행). 전각 문자·공백으로 칸을 맞춘다."""
     keys = gm.ABILITY_KEYS
-    names = sorted(gm.PLAYER_ABILITIES.keys(), key=lambda n: (-gm.player_score(n), n))
-    SP = "\u3000"  # 전각 공백 (1em)
+    SP = "\u3000"
     name_em = max([_em("이름")] + [_em(n) for n in names])
     key_em = {k: _em(k) for k in keys}
 
@@ -643,13 +640,34 @@ def grades_table_text() -> str:
         lft = pad // 2
         return SP * lft + text + SP * (pad - lft)
 
-    header = "｜".join([left("이름", name_em)] + [k for k in keys])
-    lines = [header]
+    lines = ["｜".join([left("이름", name_em)] + [k for k in keys])]
     for n in names:
         ab = gm.PLAYER_ABILITIES[n]
         cells = [left(n, name_em)] + [center(_to_fullwidth(ab.get(k, "-")), key_em[k]) for k in keys]
         lines.append("｜".join(cells))
-    return f"📊 등급표 ({len(names)}명)\n" + "\n".join(lines)
+    return lines
+
+
+def grades_table_text() -> str:
+    """전체 등급표: 합계(점수) 높은 순. grades.json 기준 (읽기만 함)."""
+    pull_squad()
+    gm = _load_squad_module("grades.py")
+    names = sorted(gm.PLAYER_ABILITIES.keys(), key=lambda n: (-gm.player_score(n), n))
+    return f"📊 등급표 ({len(names)}명)\n" + "\n".join(_grade_table_lines(names, gm))
+
+
+def grades_view_text(names: list[str]) -> str:
+    """입력한 여러 명의 등급을 등급표와 같은 틀로 보여 준다. 미등록 이름은 아래에 따로 표시."""
+    pull_squad()
+    gm = _load_squad_module("grades.py")
+    found = [n for n in names if n in gm.PLAYER_ABILITIES]
+    missing = [n for n in names if n not in gm.PLAYER_ABILITIES]
+    if not found:
+        return f"❓ 등급 미등록: {', '.join(missing)}\n등록: 등급 이름 B B A A B B"
+    text = f"📊 등급 조회 ({len(found)}명)\n" + "\n".join(_grade_table_lines(found, gm))
+    if missing:
+        text += f"\n❓ 미등록: {', '.join(missing)}"
+    return text
 
 
 def grade_text(name: str, abilities: dict) -> str:
@@ -1092,7 +1110,12 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         args = [a for a in args if a != "등급"]  # 입력에 '등급' 단어가 섞여도 무시
         if not args:
             return grades_table_text(), []
+        names = [a for a in args if a not in ("·", ",", "/")]
         name, mode, changes = parse_grade_args(args)
+        if mode == "view":  # 이름만 여러 개 → 여러 명 조회
+            if not all(_valid_grade_name(n) for n in names):
+                return GRADE_USAGE, []
+            return grades_view_text(names), []
         if mode == "error":
             return GRADE_USAGE, []
         return set_player_grades(name, mode, changes), []
