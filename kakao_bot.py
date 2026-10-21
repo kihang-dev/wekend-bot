@@ -49,6 +49,7 @@ WEEKLY_POLL = {
 }
 USERS_FILE = HERE / "users.json"
 SETTINGS_FILE = HERE / "settings.json"  # 경기 시간 같은 설정 (깃에 올리지 않음)
+LINK_FILE = HERE / "link_codes.json"  # 일반/오픈채팅 연결용 임시 코드 (깃에 올리지 않음)
 DEFAULT_START_HOUR = 8
 LOG_FILE = HERE / "events.log"
 DEBUG = os.environ.get("DEBUG") == "1"
@@ -61,6 +62,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 
 [처음 한 번]
 · 이름 홍길동 — 내 이름 등록
+· 연결 — 일반·오픈채팅방의 같은 사람 묶기 (코드 발급 후 다른 방에서 연결 코드 입력)
 
 [투표]
 · 투표 — 진행중인 투표 보기
@@ -1028,7 +1030,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1084,7 +1086,7 @@ def _parse_no(s: str) -> int:
 
 
 ALLOWED_NAMES = {"김민규", "이성학", "김기항", "김민규1", "이성학1", "김기항1"}  # 나머지 명령어를 쓸 수 있는 닉네임
-OPEN_COMMANDS = {"이름", "참석", "불참"}  # 이름 등록과 참석/불참은 누구나 쓸 수 있다
+OPEN_COMMANDS = {"이름", "참석", "불참", "연결"}  # 이름 등록과 참석/불참은 누구나 쓸 수 있다
 
 
 def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime | None) -> tuple[str, list]:
@@ -1113,6 +1115,33 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         set_poll_start_hour(poll, int(t))
         h = int(t)
         return f"⏰ 이번 투표 경기 시간을 {h:02d}:00~{h + 2:02d}:00으로 바꿨어요.", []
+
+    if cmd == "연결":  # 연결 → 이 방용 코드 발급 / 연결 4827 → 다른 방에서 받은 코드로 같은 사람 묶기
+        now_ts = now_kst()
+        codes = {c: v for c, v in _load(LINK_FILE).items() if datetime.fromisoformat(v["exp"]) > now_ts}
+        if not args:
+            my_name = _load(USERS_FILE).get(user_key)
+            if not my_name:
+                return "먼저 '@위켄봇 이름 [닉네임]'으로 이름을 등록해 주세요.", []
+            code = f"{secrets.randbelow(9000) + 1000}"
+            while code in codes:
+                code = f"{secrets.randbelow(9000) + 1000}"
+            codes[code] = {"key": user_key, "name": my_name,
+                           "exp": (now_ts + timedelta(minutes=10)).isoformat()}
+            _save(LINK_FILE, codes)
+            return (f"🔗 연결 코드: {code}\n10분 안에 다른 방에서 '@위켄봇 연결 {code}'을 입력해 주세요."), []
+        entry = codes.get(args[0])
+        if not entry:
+            _save(LINK_FILE, codes)
+            return "코드가 맞지 않거나 만료됐어요. '@위켄봇 연결'로 새 코드를 받아 주세요.", []
+        if entry["key"] == user_key:
+            return "같은 방에서 받은 코드예요. 다른 방에서 입력해 주세요.", []
+        users = _load(USERS_FILE)
+        users[user_key] = entry["name"]  # 이 방의 키를 같은 이름으로 묶는다 (중복 검사 생략: 같은 사람)
+        _save(USERS_FILE, users)
+        del codes[args[0]]
+        _save(LINK_FILE, codes)
+        return f"✅ 연결됐어요. 이 방에서도 '{entry['name']}'(으)로 인식합니다.", []
 
     if cmd == "이름":
         if not args:
