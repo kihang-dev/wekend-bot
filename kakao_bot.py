@@ -1031,15 +1031,31 @@ def clear_seonchul_locked() -> bool:
     return True
 
 
-def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = False, reset_seonchul: bool = False) -> None:
-    if not members:
-        print(f"팀짜기 {title}: 참석자가 없어 건너뜀")
-        return
+def clear_members_locked() -> bool:
+    """members.py 의 MEMBERS 를 비운다 (SQUAD_LOCK 을 잡은 상태에서 호출)."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("export_html", SQUAD_REPO / "export_html.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.update_members_file([])
+        return True
+    except Exception as e:
+        print("명단 초기화 오류:", repr(e))
+        return False
+
+
+def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = False, reset_members: bool = False) -> None:
     with SQUAD_LOCK:
         try:
             pull_squad()
-            if reset_seonchul:  # 기본/수동 마감: 선출 목록을 비운 뒤 팀을 짠다
-                clear_seonchul_locked()
+            if reset_members:  # 기본 마감: 초기화 → 투표 참석 인원으로 다시 채움 → 팀짜기
+                clear_members_locked()
+            if not members:
+                print(f"팀짜기 {title}: 참석자가 없어 건너뜀")
+                if reset_members:
+                    push_squad(f"명단 초기화: {title}")
+                return
             build_squad_html(members, game_mode, seven)
             pushed = push_squad(f"팀 구성 업데이트: {title}")  # GitHub 에 커밋·푸시
             ok = publish_squad()  # VM 웹 페이지 갱신
@@ -1048,11 +1064,11 @@ def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = Fal
             print(f"팀짜기 {title} 오류:", repr(e))
 
 
-def start_squad(poll: dict, game_mode: str = "auto", reset_seonchul: bool = False) -> None:
+def start_squad(poll: dict, game_mode: str = "auto", reset_members: bool = False) -> None:
     """팀 구성을 백그라운드에서 시작한다 (봇 응답이 멈추지 않도록)."""
     members = list(poll["attend"].values())
     seven = poll.get("place") == "조남"  # 조남 장소면 7:7
-    threading.Thread(target=_squad_job, args=(poll["title"], members, game_mode, seven, reset_seonchul), daemon=True).start()
+    threading.Thread(target=_squad_job, args=(poll["title"], members, game_mode, seven, reset_members), daemon=True).start()
 
 
 def mark_squad_started(poll_id: str, now: datetime) -> dict | None:
@@ -1085,7 +1101,7 @@ def close_due_polls(now: datetime) -> int:
     if started:
         _save(POLLS_FILE, polls)
         for p in started:
-            start_squad(p)  # 기본 마감: 팀 짜기 (선출 목록 유지)
+            start_squad(p, reset_members=True)  # 기본 마감: 명단 초기화 → 참석자 추가 → 팀짜기
     return len(started)
 
 
