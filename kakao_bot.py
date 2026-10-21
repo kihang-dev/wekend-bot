@@ -74,7 +74,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 
 [투표 관리]
 · 참석 홍길동 김민규 / 불참 홍길동 — 참석·불참 바꾸기, 여러 명 가능 (마감 후면 팀 자동 재구성)
-· 멤버 김기항 김민규 — 김기항 불참, 김민규 참석 (마감 후면 팀 자동 재구성)
+· 교체 김기항 김민규 — 김기항 불참, 김민규 참석 (마감 후면 팀 자동 재구성)
 · 장소 달월 — 장소 바꾸기
 · 날짜 261031 — 날짜 바꾸기
 · 시간 7 — 경기 시간 바꾸기 (7 → 07:00~09:00, 지각 체크 07시 01분)
@@ -136,10 +136,8 @@ def poll_reply(poll: dict, now: datetime | None, text: str) -> tuple[str, list]:
 
 
 def squad_buttons(poll: dict, now: datetime | None) -> list[dict]:
-    """마감된 투표에는 '스쿼드 만들기' 버튼을 붙인다 (누르면 @위켄봇 팀짜기 입력)."""
-    if not is_closed(poll, now):
-        return []
-    return [{"label": "스쿼드 만들기", "action": "message", "messageText": "@위켄봇 팀짜기"}]
+    """'스쿼드 만들기' 버튼은 더 이상 붙이지 않는다 (팀짜기는 명령어로만)."""
+    return []
 
 
 def _regen_or_card(poll: dict, now: datetime | None, text: str, regen: bool) -> tuple[str, list]:
@@ -1225,7 +1223,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1287,6 +1285,8 @@ OPEN_COMMANDS = {"이름", "참석", "불참", "연결"}  # 이름 등록과 참
 def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime | None) -> tuple[str, list]:
     if cmd in ("장소", "날짜") or (cmd == "멤버" and args):  # 수정 없이: 장소 달월 / 날짜 261031 / 멤버 김기항 김민규
         args, cmd = [cmd] + args, "수정"
+    if cmd == "교체":  # 교체 김기항 김민규 → 김기항 불참, 김민규 참석 (멤버 수정과 같은 동작)
+        args, cmd = ["멤버"] + args, "수정"
     if cmd not in OPEN_COMMANDS:  # 이름·참석·불참 외에는 지정된 멤버만 쓸 수 있다 (도움말 포함)
         my_name = _load(USERS_FILE).get(user_key)
         if not my_name:
