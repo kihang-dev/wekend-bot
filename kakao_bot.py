@@ -842,7 +842,8 @@ def build_squad_html(members: list[str], game_mode: str = "auto") -> None:
     mod = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(SQUAD_REPO))  # team_maker 등 import 가능하게
     spec.loader.exec_module(mod)
-    mod.generate_html(players=members, game_mode=game_mode, open_browser=False)
+    # save_members=True: 투표 인원(보정된 이름)을 weekenders-futsal 의 members.py 에도 저장
+    mod.generate_html(players=members, game_mode=game_mode, open_browser=False, save_members=True)
 
 
 def push_squad(commit_msg: str) -> bool:
@@ -853,7 +854,7 @@ def push_squad(commit_msg: str) -> bool:
         return subprocess.run(["git", *args], cwd=SQUAD_REPO,
                               capture_output=True, text=True, timeout=60)
 
-    run("add", "index.html")
+    run("add", "index.html", "members.py")  # 인원 저장(members.py)도 같은 커밋에 포함
     if not run("status", "--porcelain").stdout.strip():
         return True  # 변경 없음
     r = run("commit", "-m", commit_msg)
@@ -967,7 +968,12 @@ def fix_open_deadlines(now: datetime) -> int:
 
 def make_team(room: str, no: int | None = None, game_mode: str = "auto") -> str:
     """수동 팀짜기: 최근(또는 지정) 투표 참석자로 팀을 짠다. 결과는 잠시 뒤 링크에 반영된다."""
-    poll = get_poll(room) if no is None else get_poll_no(room, no)
+    if no is None:  # 방과 상관없이 가장 최근 투표 (스쿼드 명령과 같은 기준)
+        poll = latest_poll_any_room()
+        if poll is None:
+            raise PollError(NO_POLL, 404)
+    else:
+        poll = get_poll_no(room, no)
     members = list(poll["attend"].values())
     if not members:
         raise PollError("참석자가 없어요. 참석 투표부터 받아주세요.")
