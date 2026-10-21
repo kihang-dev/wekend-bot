@@ -1375,10 +1375,18 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                 and _load(USERS_FILE).get(user_key) in ALLOWED_NAMES:
             # 관리자: 참석 김기항 / 불참 김기항 → 그 사람의 참석·불참을 바꾼다 (마감 후에도 가능)
             names = [a.strip('"') for a in args if a.strip('"')]  # 띄어쓰기로 여러 명 가능: 참석 김기항 김민규
+            cur = (load_polls().get(room) or [])
+            if not cur:
+                raise PollError(NO_POLL, 404)
+            side = SIDES[cmd]
+            already = set(cur[-1][side].values())  # 이미 같은 상태인 사람은 건드리지 않는다
+            changed = [nm for nm in names if nm not in already]
+            if not changed:  # 바뀐 게 없으면 팀을 다시 짜지 않는다
+                return f"{', '.join(names)}님은 이미 {cmd} 상태예요.", []
             poll = None
-            for nm in names:
-                poll = set_attendance(room, nm, SIDES[cmd])
-            return _regen_or_card(poll, now, f"{', '.join(names)}님을 {cmd}으로 바꿨어요.", True)
+            for nm in changed:
+                poll = set_attendance(room, nm, side)
+            return _regen_or_card(poll, now, f"{', '.join(changed)}님을 {cmd}으로 바꿨어요.", True)
         polls = load_polls()
         pid = None
         if args and (args[0].startswith("#") or args[0].isdigit()):  # "참석 2" 또는 버튼의 "참석 #2"
@@ -1552,17 +1560,30 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                 get_poll(room)
                 return "사용법: 날짜 [YYMMDD]  예) 날짜 261031", []
             poll = update_poll(room, date_str=sub_args[0], no=no)
-        elif sub == "멤버":  # 수정 멤버 김기항 김민규 → 김기항 불참, 김민규 참석
+        elif sub == "멤버":  # 수정 멤버 김기항 김민규 → 김기항 불참, 김민규 참석 (이미 그 상태인 사람은 건드리지 않음)
             if len(sub_args) != 2:
                 return "사용법: 멤버 [불참할 이름] [참석할 이름]\n예) 멤버 김기항 김민규", []
-            set_attendance(room, sub_args[0], SIDES["불참"], no=no)
-            poll = set_attendance(room, sub_args[1], SIDES["참석"], no=no)
-            if is_closed(poll, now):  # 마감된 투표의 참석자가 바뀌면 팀을 자동으로 다시 짠다 (버튼 없음)
+            out_name, in_name = sub_args
+            polls0 = load_polls()
+            p0 = (polls0.get(room) or [None])[-1] if no is None else find_by_no(polls0, room, no)
+            if p0 is None:
+                raise PollError(NO_POLL, 404)
+            changes, poll = [], p0
+            if out_name in p0["attend"].values():
+                poll = set_attendance(room, out_name, SIDES["불참"], no=no)
+                changes.append(f"{out_name}님을 불참")
+            if in_name not in p0["attend"].values():
+                poll = set_attendance(room, in_name, SIDES["참석"], no=no)
+                changes.append(f"{in_name}님을 참석")
+            if not changes:  # 이미 원하는 상태면 팀을 다시 짜지 않는다
+                return f"바뀐 내용이 없어요. 참석 명단을 그대로 둘게요.\n{poll_summary(p0)}", []
+            text = f"{', '.join(changes)}으로 바꿨어요."
+            if is_closed(poll, now):  # 마감된 투표의 참석자가 바뀌면 팀을 자동으로 다시 짠다
                 start_squad(poll, "auto")
-                return (f"{sub_args[0]}님을 불참, {sub_args[1]}님을 참석으로 바꿨어요.\n"
+                return (f"{text}\n"
                         "⚽ 팀을 자동으로 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n"
                         f"👉 {SQUAD_URL}"), []
-            return poll_reply(poll, now, f"{sub_args[0]}님을 불참, {sub_args[1]}님을 참석으로 바꿨어요.")
+            return poll_reply(poll, now, text)
         else:
             return "수정할 항목은 장소 / 날짜 / 멤버 중 하나예요.", []
         return f"{poll['no']}번 투표를 수정했어요.\n{poll_summary(poll)}", []
