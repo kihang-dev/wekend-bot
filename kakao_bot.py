@@ -288,6 +288,7 @@ def create_poll(room: str, date_str: str, place: str, creator: str,
         "attend": {},
         "absent": {},
         "creator": creator,
+        "start_hour": DEFAULT_START_HOUR,  # 새 투표는 기본 8시 (시간 명령으로 이 투표만 바꿀 수 있음)
     }
     _retitle(poll)
     polls.setdefault(room, []).append(poll)
@@ -813,18 +814,25 @@ def latest_poll_any_room() -> dict | None:
     return max(all_polls, key=_created)
 
 
-def get_start_hour() -> int:
-    """경기 시작 시각(시). 설정이 없거나 잘못되면 기본 8시."""
-    try:
-        h = int(_load(SETTINGS_FILE).get("start_hour", DEFAULT_START_HOUR))
-    except (TypeError, ValueError):
-        return DEFAULT_START_HOUR
-    return h if 0 <= h <= 22 else DEFAULT_START_HOUR
+def get_start_hour(poll: dict | None = None) -> int:
+    """이 투표의 경기 시작 시각(시). 저장된 값이 없으면 기본 8시."""
+    h = (poll or {}).get("start_hour", DEFAULT_START_HOUR)
+    return h if isinstance(h, int) and 0 <= h <= 22 else DEFAULT_START_HOUR
 
 
-def notice_rules() -> str:
-    """경기 시간(2시간)과 지각 체크 시각을 설정값으로 만든다. 예) 7 → 07:00~09:00, 07시 01분부터"""
-    h = get_start_hour()
+def set_poll_start_hour(poll: dict, h: int) -> None:
+    """투표 하나의 경기 시작 시각만 바꾼다 (다른 투표에는 영향 없음)."""
+    polls = load_polls()
+    for lst in polls.values():
+        for p in lst or []:
+            if p.get("id") == poll.get("id") and p.get("created") == poll.get("created"):
+                p["start_hour"] = h
+    _save(POLLS_FILE, polls)
+
+
+def notice_rules(poll: dict | None = None) -> str:
+    """경기 시간(2시간)과 지각 체크 시각을 이 투표의 시작 시각으로 만든다. 예) 7 → 07:00~09:00, 07시 01분부터"""
+    h = get_start_hour(poll)
     return (f"⏰ 경기 시간: {h:02d}:00~{h + 2:02d}:00\n"
             f"- 지각 체크: {h:02d}시 01분부터\n"
             "- 노쇼: 경기 시작 후 1시간 경과 시점부터")
@@ -839,7 +847,7 @@ def make_squad(room: str) -> str:
     parts = ["📢 이번 주 풋살 공지", f"👥 스쿼드 구성 페이지: {SQUAD_URL}"]
     if poll:
         parts.append(place_text(poll["place"]))
-    parts.append(notice_rules())
+    parts.append(notice_rules(poll))
     parts.append("다들 늦지 않게 와주세요!")
     return "\n\n".join(parts)
 
@@ -1092,16 +1100,19 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
     if cmd == "도움말":
         return HELP_TEXT, []
 
-    if cmd == "시간":  # 시간 7 → 07:00~09:00 / 시간 10 → 10:00~12:00
-        h = get_start_hour()
+    if cmd == "시간":  # 시간 7 → 이번 투표 07:00~09:00 / 시간 10 → 10:00~12:00 (새 투표는 기본 8시)
+        poll = latest_poll_any_room()
         if not args:
+            h = get_start_hour(poll)
             return f"⏰ 현재 경기 시간: {h:02d}:00~{h + 2:02d}:00\n사용법: 시간 7 (7:00~9:00으로 변경)", []
         t = args[0].rstrip("시")
         if not t.isdigit() or not 0 <= int(t) <= 22:
             return "사용법: 시간 [시작 시각 0~22]\n예) 시간 7 → 07:00~09:00", []
-        _save(SETTINGS_FILE, {**_load(SETTINGS_FILE), "start_hour": int(t)})
+        if poll is None:
+            raise PollError(NO_POLL, 404)
+        set_poll_start_hour(poll, int(t))
         h = int(t)
-        return f"⏰ 경기 시간을 {h:02d}:00~{h + 2:02d}:00으로 바꿨어요.", []
+        return f"⏰ 이번 투표 경기 시간을 {h:02d}:00~{h + 2:02d}:00으로 바꿨어요.", []
 
     if cmd == "이름":
         if not args:
