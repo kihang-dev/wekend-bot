@@ -784,6 +784,7 @@ def add_new_player(name: str, grades6: dict, first: str, second: str) -> str:
 PLACE_INFO = {
     "달월": {"addr": "경기 시흥시 월곶동 956-15", "img": "dalwol.jpeg"},
     "월곶": {"addr": "경기도 시흥시 월곶동 520-256", "img": "wolgot.png"},
+    "조남": {"addr": "경기도 시흥시 조남동 산19-1", "img": None},  # 조남은 7:7 로 짠다 (사진 없음)
 }
 
 
@@ -793,8 +794,10 @@ def place_text(place: str) -> str:
         return f"📍 장소: {place}"
     from urllib.parse import quote
     map_url = f"https://map.kakao.com/?q={quote(info['addr'])}"
-    return (f"📍 장소: {place}\n\n🏠 주소: {info['addr']}\n\n🗺 지도: {map_url}\n\n"
-            f"🖼 사진: {SQUAD_URL}{info['img']}")
+    lines = [f"📍 장소: {place}", f"🏠 주소: {info['addr']}", f"🗺 지도: {map_url}"]
+    if info.get("img"):
+        lines.append(f"🖼 사진: {SQUAD_URL}{info['img']}")
+    return "\n\n".join(lines)
 
 
 def latest_poll_any_room() -> dict | None:
@@ -829,7 +832,7 @@ def make_squad(room: str) -> str:
     return "\n\n".join(parts)
 
 
-def build_squad_html(members: list[str], game_mode: str = "auto") -> None:
+def build_squad_html(members: list[str], game_mode: str = "auto", seven: bool = False) -> None:
     """weekenders-futsal 레포의 export_html.generate_html 로 index.html 생성."""
     import importlib.util
 
@@ -843,6 +846,7 @@ def build_squad_html(members: list[str], game_mode: str = "auto") -> None:
     sys.path.insert(0, str(SQUAD_REPO))  # team_maker 등 import 가능하게
     spec.loader.exec_module(mod)
     # save_members=True: 투표 인원(보정된 이름)을 weekenders-futsal 의 members.py 에도 저장
+    mod.SEVEN_V_SEVEN = seven  # 조남: 14명 자체를 7:7(벤치 0)로 짠다
     mod.generate_html(players=members, game_mode=game_mode, open_browser=False, save_members=True)
 
 
@@ -895,14 +899,14 @@ def publish_squad() -> bool:
         return False
 
 
-def _squad_job(title: str, members: list[str], game_mode: str) -> None:
+def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = False) -> None:
     if not members:
         print(f"팀짜기 {title}: 참석자가 없어 건너뜀")
         return
     with SQUAD_LOCK:
         try:
             pull_squad()
-            build_squad_html(members, game_mode)
+            build_squad_html(members, game_mode, seven)
             pushed = push_squad(f"팀 구성 업데이트: {title}")  # GitHub 에 커밋·푸시
             ok = publish_squad()  # VM 웹 페이지 갱신
             print(f"팀짜기 {title}: {'완료' if ok else '실패'}" + ("" if pushed else " (GitHub push 실패)"))
@@ -913,7 +917,8 @@ def _squad_job(title: str, members: list[str], game_mode: str) -> None:
 def start_squad(poll: dict, game_mode: str = "auto") -> None:
     """팀 구성을 백그라운드에서 시작한다 (봇 응답이 멈추지 않도록)."""
     members = list(poll["attend"].values())
-    threading.Thread(target=_squad_job, args=(poll["title"], members, game_mode), daemon=True).start()
+    seven = poll.get("place") == "조남"  # 조남 장소면 7:7
+    threading.Thread(target=_squad_job, args=(poll["title"], members, game_mode, seven), daemon=True).start()
 
 
 def mark_squad_started(poll_id: str, now: datetime) -> dict | None:
