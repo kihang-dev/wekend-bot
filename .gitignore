@@ -16,3 +16,6 @@ events.log
 auto_push.log
 
 settings.json
+
+links.json
+link_codes.json

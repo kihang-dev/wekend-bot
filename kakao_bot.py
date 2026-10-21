@@ -50,6 +50,7 @@ WEEKLY_POLL = {
 USERS_FILE = HERE / "users.json"
 SETTINGS_FILE = HERE / "settings.json"  # 경기 시간 같은 설정 (깃에 올리지 않음)
 LINK_FILE = HERE / "link_codes.json"  # 일반/오픈채팅 연결용 임시 코드 (깃에 올리지 않음)
+LINKS_FILE = HERE / "links.json"  # 같은 사람으로 묶인 카톡 키 목록 {묶음번호: [키, ...]} (깃에 올리지 않음)
 DEFAULT_START_HOUR = 8
 LOG_FILE = HERE / "events.log"
 DEBUG = os.environ.get("DEBUG") == "1"
@@ -245,20 +246,31 @@ def list_polls() -> dict:
     return load_polls()
 
 
+def group_keys(user_key: str) -> list[str]:
+    """이 키와 같은 사람으로 묶인 키 전부 (묶인 적 없으면 자기 키만)."""
+    for keys in _load(LINKS_FILE).values():
+        if user_key in keys:
+            return list(keys)
+    return [user_key]
+
+
 def register_name(user_key: str, name: str) -> str:
     name = name.strip()
     if not name:
         raise PollError("이름을 입력해주세요.")
+    group = set(group_keys(user_key))
     users = _load(USERS_FILE)
-    if any(n == name and k != user_key for k, n in users.items()):  # 동명이인 등록 불가
+    if any(n == name and k not in group for k, n in users.items()):  # 동명이인 등록 불가 (같은 사람의 묶인 키는 제외)
         raise PollError(f"'{name}' 이름은 이미 다른 사람이 쓰고 있어요. 다른 이름을 입력해주세요.", 409)
-    users[user_key] = name
+    for k in group:  # 묶인 키 전부 같은 이름으로 바꾼다
+        users[k] = name
     _save(USERS_FILE, users)
-    polls = load_polls()  # 이미 투표했다면 명단의 이름도 갱신
+    polls = load_polls()  # 이미 투표했다면 명단의 이름도 갱신 (묶인 키 전부)
     for poll in (p for lst in polls.values() for p in lst):
         for side in ("attend", "absent"):
-            if user_key in poll[side]:
-                poll[side][user_key] = name
+            for k in group:
+                if k in poll[side]:
+                    poll[side][k] = name
     _save(POLLS_FILE, polls)
     return name
 
@@ -1136,8 +1148,15 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return "코드가 맞지 않거나 만료됐어요. '@위켄봇 연결'로 새 코드를 받아 주세요.", []
         if entry["key"] == user_key:
             return "같은 방에서 받은 코드예요. 다른 방에서 입력해 주세요.", []
+        # 두 키를 한 묶음으로 저장하고, 묶인 키 전부 같은 이름으로 맞춘다
+        merged = set(group_keys(entry["key"])) | set(group_keys(user_key))
+        links = {g: ks for g, ks in _load(LINKS_FILE).items()
+                 if not (set(ks) & merged)}
+        links[entry["key"]] = sorted(merged)
+        _save(LINKS_FILE, links)
         users = _load(USERS_FILE)
-        users[user_key] = entry["name"]  # 이 방의 키를 같은 이름으로 묶는다 (중복 검사 생략: 같은 사람)
+        for k in merged:
+            users[k] = entry["name"]
         _save(USERS_FILE, users)
         del codes[args[0]]
         _save(LINK_FILE, codes)
