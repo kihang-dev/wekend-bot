@@ -972,7 +972,7 @@ def pull_squad() -> None:
     """팀배정 로직 최신화: export_html 호출 전에 weekenders-futsal 을 pull."""
     import subprocess
     try:
-        subprocess.run(["git", "pull", "--ff-only", "origin", "HEAD"],
+        subprocess.run(["git", "pull", "--rebase", "--autostash", "origin", "HEAD"],
                        cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         print("squad pull 경고 (무시하고 진행):", repr(e))
@@ -1049,12 +1049,11 @@ def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = Fal
     with SQUAD_LOCK:
         try:
             pull_squad()
-            if reset_members:  # 기본 마감: 초기화 → 투표 참석 인원으로 다시 채움 → 팀짜기
+            if reset_members:  # 기본 마감: 최신 pull → 명단 초기화 → push → 참석자로 팀짜기
                 clear_members_locked()
+                push_squad(f"명단 초기화: {title}")
             if not members:
                 print(f"팀짜기 {title}: 참석자가 없어 건너뜀")
-                if reset_members:
-                    push_squad(f"명단 초기화: {title}")
                 return
             build_squad_html(members, game_mode, seven)
             pushed = push_squad(f"팀 구성 업데이트: {title}")  # GitHub 에 커밋·푸시
