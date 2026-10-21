@@ -83,7 +83,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 
 [스쿼드]
 · 스쿼드 — 스쿼드 페이지 링크
-· 팀짜기 — 참석자로 팀 구성\n· 팀다시짜기 — 현재 참석자로 팀을 다시 짜고 명단 교체\n· 팀짜기 매칭 — 무조건 매칭 (6명 이상)\n· 팀짜기 자체 — 무조건 자체 (10명 이상)
+· 팀짜기 — 참석자로 팀 구성\n· 팀다시짜기 — 현재 참석자로 팀을 다시 구성\n· 팀짜기 매칭 — 무조건 매칭 (6명 이상)\n· 팀짜기 자체 — 무조건 자체 (10명 이상)\n· 같은팀 [이름1] [이름2] — 두 사람을 같은 팀으로 고정 (마감 후)\n· 다른팀 [이름1] [이름2] — 두 사람을 다른 팀으로 고정 (마감 후)\n· 팀삭제 [이름1] [이름2] — 두 사람의 같은팀/다른팀 고정 삭제 (마감 후)
 · 명단 — 전체 명단 보기
 · 선출 홍길동 — 선출 등록 (합산점수 40점 고정, GitHub 반영) / 선출 홍길동 해제 / 선출 — 목록
 · 포지션 김기항 ST/LB — 선호 포지션 바꾸기"""
@@ -132,7 +132,7 @@ def _regen_or_card(poll: dict, now: datetime | None, text: str, regen: bool) -> 
     """마감된 투표의 참석자가 바뀌었으면 팀을 백그라운드로 자동 재구성한다 (버튼 없음). 진행 중이면 투표 카드."""
     if regen and is_closed(poll, now):
         start_squad(poll, "auto")
-        return f"{text}\n⚽ 팀을 자동으로 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.", []
+        return f"{text}\n⚽ 팀을 자동으로 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n👉 {SQUAD_URL}", []
     return poll_reply(poll, now, text)
 
 
@@ -1515,7 +1515,8 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             if is_closed(poll, now):  # 마감된 투표의 장소가 바뀌면 팀을 다시 짠다 (같은 인원·같은 규칙이면 팀은 그대로)
                 start_squad(poll, "auto")
                 return (f"{poll['no']}번 투표 장소를 {poll['place']}(으)로 바꿨어요.\n"
-                        "⚽ 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."), []
+                        "⚽ 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n"
+                        f"👉 {SQUAD_URL}"), []
         elif sub == "날짜":
             if not sub_args or not parse_date(sub_args[0]):
                 get_poll(room)
@@ -1529,7 +1530,8 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             if is_closed(poll, now):  # 마감된 투표의 참석자가 바뀌면 팀을 자동으로 다시 짠다 (버튼 없음)
                 start_squad(poll, "auto")
                 return (f"{sub_args[0]}님을 불참, {sub_args[1]}님을 참석으로 바꿨어요.\n"
-                        "⚽ 팀을 자동으로 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."), []
+                        "⚽ 팀을 자동으로 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n"
+                        f"👉 {SQUAD_URL}"), []
             return poll_reply(poll, now, f"{sub_args[0]}님을 불참, {sub_args[1]}님을 참석으로 바꿨어요.")
         else:
             return "수정할 항목은 장소 / 날짜 / 멤버 중 하나예요.", []
@@ -1561,7 +1563,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         if not att:
             return text, []
         start_squad(poll, "auto")  # 수동 마감: 팀 짜기 (선출 목록 유지, 버튼 없음)
-        text += "\n\n⚽ 팀을 자동으로 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."
+        text += f"\n\n⚽ 팀을 자동으로 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n👉 {SQUAD_URL}"
         return text, []
 
     if cmd == "투표조회":
