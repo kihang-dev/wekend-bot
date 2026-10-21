@@ -976,13 +976,43 @@ def publish_squad() -> bool:
         return False
 
 
-def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = False) -> None:
+def clear_seonchul_locked() -> bool:
+    """grades.py 의 SEONCHUL_PLAYERS 를 비우고 GitHub 에 커밋·푸시한다. SQUAD_LOCK 을 잡은 상태에서 호출."""
+    import subprocess
+    path = SQUAD_REPO / "grades.py"
+    if not path.exists():
+        print("선출 초기화 건너뜀: grades.py 없음")
+        return False
+    src = path.read_text(encoding="utf-8")
+    m = re.search(r"SEONCHUL_PLAYERS = \[(.*?)\]", src, re.S)
+    if not m or not re.findall(r'^\s*"([^"]+)"', m.group(1), re.M):
+        return False  # 이미 비어 있음
+    path.write_text(src[:m.start()] + "SEONCHUL_PLAYERS = [\n]" + src[m.end():], encoding="utf-8")
+
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
+
+    run("add", "grades.py")
+    r = run("commit", "-m", "선출 목록 초기화 (마감)")
+    if r.returncode != 0 and "nothing to commit" not in (r.stdout + r.stderr):
+        print("선출 초기화 커밋 실패:", r.stderr)
+        return False
+    r = run("push", "origin", "HEAD")
+    if r.returncode != 0:
+        print("선출 초기화 푸시 실패:", r.stderr)
+        return False
+    return True
+
+
+def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = False, reset_seonchul: bool = False) -> None:
     if not members:
         print(f"팀짜기 {title}: 참석자가 없어 건너뜀")
         return
     with SQUAD_LOCK:
         try:
             pull_squad()
+            if reset_seonchul:  # 기본/수동 마감: 선출 목록을 비운 뒤 팀을 짠다
+                clear_seonchul_locked()
             build_squad_html(members, game_mode, seven)
             pushed = push_squad(f"팀 구성 업데이트: {title}")  # GitHub 에 커밋·푸시
             ok = publish_squad()  # VM 웹 페이지 갱신
@@ -991,11 +1021,11 @@ def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = Fal
             print(f"팀짜기 {title} 오류:", repr(e))
 
 
-def start_squad(poll: dict, game_mode: str = "auto") -> None:
+def start_squad(poll: dict, game_mode: str = "auto", reset_seonchul: bool = False) -> None:
     """팀 구성을 백그라운드에서 시작한다 (봇 응답이 멈추지 않도록)."""
     members = list(poll["attend"].values())
     seven = poll.get("place") == "조남"  # 조남 장소면 7:7
-    threading.Thread(target=_squad_job, args=(poll["title"], members, game_mode, seven), daemon=True).start()
+    threading.Thread(target=_squad_job, args=(poll["title"], members, game_mode, seven, reset_seonchul), daemon=True).start()
 
 
 def mark_squad_started(poll_id: str, now: datetime) -> dict | None:
@@ -1028,7 +1058,7 @@ def close_due_polls(now: datetime) -> int:
     if started:
         _save(POLLS_FILE, polls)
         for p in started:
-            start_squad(p)
+            start_squad(p, reset_seonchul=True)  # 기본 마감: 선출 초기화 후 팀 짜기
     return len(started)
 
 
@@ -1395,7 +1425,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                 f"참석 {len(att)}명: {', '.join(att) if att else '-'}")
         if not att:
             return text, []
-        start_squad(poll, "auto")  # 마감과 동시에 팀을 백그라운드로 자동 구성 (버튼 없음)
+        start_squad(poll, "auto", reset_seonchul=True)  # 수동 마감: 선출 초기화 후 팀 짜기 (버튼 없음)
         text += "\n\n⚽ 팀을 자동으로 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."
         return text, []
 
