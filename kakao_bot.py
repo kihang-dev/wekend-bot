@@ -1085,7 +1085,7 @@ def close_due_polls(now: datetime) -> int:
     if started:
         _save(POLLS_FILE, polls)
         for p in started:
-            start_squad(p, reset_seonchul=True)  # 기본 마감: 선출 초기화 후 팀 짜기
+            start_squad(p)  # 기본 마감: 팀 짜기 (선출 목록 유지)
     return len(started)
 
 
@@ -1462,7 +1462,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                 f"참석 {len(att)}명: {', '.join(att) if att else '-'}")
         if not att:
             return text, []
-        start_squad(poll, "auto", reset_seonchul=True)  # 수동 마감: 선출 초기화 후 팀 짜기 (버튼 없음)
+        start_squad(poll, "auto")  # 수동 마감: 팀 짜기 (선출 목록 유지, 버튼 없음)
         text += "\n\n⚽ 팀을 자동으로 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."
         return text, []
 
