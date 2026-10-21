@@ -95,6 +95,25 @@ def vote_buttons(poll: dict) -> list[dict]:
         {"label": "참석", "action": "message", "messageText": f"참석 #{poll['no']}"},
         {"label": "불참", "action": "message", "messageText": f"불참 #{poll['no']}"},
     ]
+def roster_names() -> list[str]:
+    """weekenders-futsal 명단 (grades.json 에 등록된 선수 전체). 못 읽으면 빈 목록."""
+    try:
+        return list(_load_squad_module("grades.py").PLAYER_ABILITIES.keys())
+    except Exception as e:
+        print("명단 읽기 실패 (미응답 표시 생략):", repr(e))
+        return []
+
+
+def poll_summary(p: dict) -> str:
+    """투표 요약 + 명단 중 아직 응답하지 않은 인원 (참석·불참 어느 쪽도 없는 선수)."""
+    base = _poll_summary_base(p)
+    responded = set(p["attend"].values()) | set(p["absent"].values())
+    waiting = [n for n in roster_names() if n not in responded]
+    if not waiting:
+        return base
+    return base + f"\n⏳ 미응답 {len(waiting)}명: {', '.join(waiting)}"
+
+
 def poll_reply(poll: dict, now: datetime | None, text: str) -> tuple[str, list]:
     """진행중이면 문구 + 투표 카드(참석/불참 버튼), 마감됐으면 문구만(스쿼드 버튼은 유지)."""
     if is_closed(poll, now):
@@ -1108,7 +1127,7 @@ def make_team(room: str, no: int | None = None, game_mode: str = "auto") -> str:
 
 
 # ============================ 카톡 명령 처리 ============================
-def poll_summary(p: dict) -> str:
+def _poll_summary_base(p: dict) -> str:
     att, absn = list(p["attend"].values()), list(p["absent"].values())
     return "\n".join([
         f"🗳 {p.get('no', '')}번 · {p['title']}" + (f"\n📝 {p['desc']}" if p.get("desc") else ""),
@@ -1334,7 +1353,17 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return ("⭐ 선출 목록: " + ", ".join(names)) if names else "선출 목록이 비어 있어요.", []
         if len(args) >= 2 and args[-1] in ("해제", "취소"):
             return set_seonchul(" ".join(args[:-1]), False), []
-        return set_seonchul(" ".join(args), True), []
+        name = " ".join(args)
+        msg = set_seonchul(name, True)  # 선출 명단에 등록 (GitHub 반영)
+        try:  # 용병처럼 최근 투표의 참석자에도 넣는다 (이미 참석자면 선출 명단에만 남는다)
+            poll, added, _ = add_mercenaries(room, None, [name], now)
+        except PollError:
+            return msg + "\n(진행중인 투표가 없어 참석자 추가는 건너뛰었어요.)", []
+        if added:
+            msg += f"\n'{poll['title']}' 참석자에 추가했어요."
+        else:
+            msg += "\n이미 참석자예요. 선출 명단에만 등록했어요."
+        return _regen_or_card(poll, now, msg, bool(added))
 
     if cmd == "등급":  # 등급 → 전체 등급표 / 등급 김민규 → 조회 / 등급 김민규 수비 A / 등급 김민규 B B A A B B
         args = [a for a in args if a != "등급"]  # 입력에 '등급' 단어가 섞여도 무시
