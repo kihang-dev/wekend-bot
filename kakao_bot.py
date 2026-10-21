@@ -935,6 +935,8 @@ def build_squad_html(members: list[str], game_mode: str = "auto", seven: bool = 
     # export_html.py 를 동적 로드 (team_maker/grades/positions 등 같은 폴더에서 import 됨)
     spec = importlib.util.spec_from_file_location("squad_export", export_path)
     mod = importlib.util.module_from_spec(spec)
+    for _m in ("members", "team_maker", "grades", "positions"):  # 매번 최신 파일을 읽도록 캐시 제거
+        sys.modules.pop(_m, None)
     sys.path.insert(0, str(SQUAD_REPO))  # team_maker 등 import 가능하게
     spec.loader.exec_module(mod)
     # save_members=True: 투표 인원(보정된 이름)을 weekenders-futsal 의 members.py 에도 저장
@@ -1120,6 +1122,57 @@ def fix_open_deadlines(now: datetime) -> int:
     return fixed
 
 
+def update_fixed_pair_locked(kind: str, a: str, b: str) -> bool:
+    """members.py 의 FIXED_SAME_TEAM / FIXED_DIFF_TEAM 에서 이 쌍을 빼고, kind 에 맞는 쪽에 넣는다.
+    SQUAD_LOCK 을 잡은 상태에서 호출. 같은 쌍이 반대쪽에 있으면 자동으로 옮겨진다."""
+    import importlib.util, re
+    path = SQUAD_REPO / "members.py"
+    spec = importlib.util.spec_from_file_location("members_edit", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    same = [tuple(x) for x in getattr(mod, "FIXED_SAME_TEAM", [])]
+    diff = [tuple(x) for x in getattr(mod, "FIXED_DIFF_TEAM", [])]
+    same = [p for p in same if set(p) != {a, b}]
+    diff = [p for p in diff if set(p) != {a, b}]
+    (same if kind == "same" else diff).append((a, b))
+
+    def fmt(lst):
+        return "[" + ", ".join(f'("{x}", "{y}")' for x, y in lst) + "]"
+
+    src = path.read_text(encoding="utf-8")
+    src, n1 = re.subn(r"FIXED_SAME_TEAM\s*=\s*\[.*?\]", "FIXED_SAME_TEAM = " + fmt(same), src, count=1, flags=re.S)
+    src, n2 = re.subn(r"FIXED_DIFF_TEAM\s*=\s*\[.*?\]", "FIXED_DIFF_TEAM = " + fmt(diff), src, count=1, flags=re.S)
+    if n1 == 0 or n2 == 0:
+        print("고정 조건 저장 실패: members.py 에서 FIXED_* 항목을 찾지 못함")
+        return False
+    path.write_text(src, encoding="utf-8")
+    return True
+
+
+def _fixed_job(title: str, members: list[str], kind: str, a: str, b: str, seven: bool) -> None:
+    """백그라운드: git pull → 고정 조건 저장 → git push → 팀짜기 → push → 스쿼드 페이지 갱신."""
+    import subprocess
+    with SQUAD_LOCK:
+        try:
+            pull_squad()
+            if not update_fixed_pair_locked(kind, a, b):
+                return
+            push_squad(f"고정 조건 변경: {'같은팀' if kind == 'same' else '다른팀'} {a} {b}")
+            build_squad_html(members, "auto", seven)
+            pushed = push_squad(f"팀 구성 업데이트: {title}")
+            ok = publish_squad()
+            print(f"고정 팀짜기 {title}: {'완료' if ok else '실패'}" + ("" if pushed else " (GitHub push 실패)"))
+        except Exception as e:
+            print(f"고정 팀짜기 {title} 오류:", repr(e))
+
+
+def start_fixed_pair(kind: str, a: str, b: str, poll: dict) -> None:
+    """같은팀/다른팀 고정을 저장하고 팀을 백그라운드에서 다시 짠다."""
+    members = list(poll["attend"].values())
+    seven = poll.get("place") == "조남"
+    threading.Thread(target=_fixed_job, args=(poll["title"], members, kind, a, b, seven), daemon=True).start()
+
+
 def make_team(room: str, no: int | None = None, game_mode: str = "auto") -> str:
     """수동 팀짜기: 최근(또는 지정) 투표 참석자로 팀을 짠다. 결과는 잠시 뒤 링크에 반영된다."""
     if no is None:  # 방과 상관없이 가장 최근 투표 (스쿼드 명령과 같은 기준)
@@ -1153,7 +1206,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1399,6 +1452,27 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
 
     if cmd == "스쿼드":  # 스쿼드 페이지 주소만 안내
         return make_squad(room), []
+
+    if cmd in ("같은팀", "다른팀"):  # 같은팀 김민규 김기항 → 같은 팀 고정 / 다른팀 … → 다른 팀 고정 (저장 후 팀 다시 짜기)
+        if len(args) != 2:
+            return "사용법: 같은팀 [이름1] [이름2] / 다른팀 [이름1] [이름2]\n예) 같은팀 김민규 김기항", []
+        if args[0] == args[1]:
+            return "같은 사람끼리는 묶을 수 없어요.", []
+        poll = latest_poll_any_room()
+        if poll is None:
+            raise PollError(NO_POLL, 404)
+        att = list(poll["attend"].values())
+        missing = [x for x in args if x not in att]
+        if missing:
+            return f"참석자 명단에 없어요: {', '.join(missing)}", []
+        if len(att) < 6:
+            return f"팀을 짜려면 참석자가 6명 이상이어야 해요. (현재 {len(att)}명)", []
+        kind = "same" if cmd == "같은팀" else "diff"
+        start_fixed_pair(kind, args[0], args[1], poll)
+        word = "같은 팀" if kind == "same" else "다른 팀"
+        return (f"✅ {args[0]} · {args[1]} → {word}으로 고정했어요.\n"
+                f"⚽ 저장한 뒤 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n"
+                f"👉 {SQUAD_URL}"), []
 
     if cmd in ("팀짜기", "팀다시짜기"):  # 팀다시짜기 = 같은 동작 (현재 참석자로 팀을 다시 짜고 members.py 교체)
         # 팀짜기 → 최근 투표 참석자로 자동 모드(인원 따라 매칭/자체) / 팀짜기 2 → 2번 투표
