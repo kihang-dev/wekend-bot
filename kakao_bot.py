@@ -83,8 +83,9 @@ HELP_TEXT = """📖 위켄봇 사용법
 
 [스쿼드]
 · 스쿼드 — 스쿼드 페이지 링크
-· 팀짜기 — 참석자로 팀 구성\n· 팀다시짜기 — 현재 참석자로 팀을 다시 짜고 명단 교체\n· 팀짜기 매칭 — 무조건 매칭 (6명 이상)\n· 팀짜기 자체 — 무조건 자체 (8명 이상)
+· 팀짜기 — 참석자로 팀 구성\n· 팀다시짜기 — 현재 참석자로 팀을 다시 짜고 명단 교체\n· 팀짜기 매칭 — 무조건 매칭 (6명 이상)\n· 팀짜기 자체 — 무조건 자체 (10명 이상)
 · 명단 — 전체 명단 보기
+· 선출 홍길동 — 선출 등록 (합산점수 40점 고정, GitHub 반영) / 선출 홍길동 해제 / 선출 — 목록
 · 포지션 김기항 ST/LB — 선호 포지션 바꾸기"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
@@ -584,6 +585,44 @@ GRADE_USAGE = ("사용법\n"
                "  (순서: 패스 리턴 수비 드리블 볼소유 골결정력 / 등급: A B C D)")
 
 
+def set_seonchul(name: str, on: bool) -> str:
+    """grades.py 의 SEONCHUL_PLAYERS 목록에 선출을 넣거나 뺀다. 바꾼 뒤 GitHub 에 커밋·푸시한다."""
+    import subprocess
+    if not _valid_grade_name(name):
+        raise PollError("선출 이름 형식이 맞지 않아요. 예) 선출 홍길동")
+    path = SQUAD_REPO / "grades.py"
+    if not path.exists():
+        raise PollError(f"grades.py 를 찾을 수 없어요: {path}", 500)
+    with SQUAD_LOCK:
+        pull_squad()
+        src = path.read_text(encoding="utf-8")
+        m = re.search(r"SEONCHUL_PLAYERS = \[(.*?)\]", src, re.S)
+        if not m:
+            raise PollError("grades.py 에서 SEONCHUL_PLAYERS 목록을 찾을 수 없어요.", 500)
+        names = re.findall(r'^\s*"([^"]+)"', m.group(1), re.M)  # 주석(# ...) 줄은 제외
+        if on and name in names:
+            return f"⭐ {name} 은(는) 이미 선출이에요."
+        if not on and name not in names:
+            return f"{name} 은(는) 선출 목록에 없어요."
+        names = names + [name] if on else [n for n in names if n != name]
+        body = "SEONCHUL_PLAYERS = [\n" + "".join(f'    "{n}",\n' for n in names) + "]"
+        path.write_text(src[:m.start()] + body + src[m.end():], encoding="utf-8")
+
+        def run(*args):
+            return subprocess.run(["git", *args], cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
+
+        run("add", "grades.py")
+        r = run("commit", "-m", f"선출 {'등록' if on else '해제'}: {name}")
+        if r.returncode != 0 and "nothing to commit" not in (r.stdout + r.stderr):
+            raise PollError(f"커밋 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
+        r = run("push", "origin", "HEAD")
+        if r.returncode != 0:
+            raise PollError(f"GitHub 푸시 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
+    if on:
+        return f"⭐ {name} 선출 등록 완료 (합산점수 고정, GitHub 반영)"
+    return f"✅ {name} 선출 해제 완료 (GitHub 반영)"
+
+
 def _valid_grade_name(name: str) -> bool:
     """이름은 한글/영문 1~3단어, 12자 이하만 허용. 기호·구분자가 섞이면 저장하지 않는다."""
     import re
@@ -1020,10 +1059,10 @@ def make_team(room: str, no: int | None = None, game_mode: str = "auto") -> str:
     members = list(poll["attend"].values())
     if not members:
         raise PollError("참석자가 없어요. 참석 투표부터 받아주세요.")
-    min_n = {"self": 8, "match": 6, "auto": 6}.get(game_mode, 6)
+    min_n = {"self": 10, "match": 6, "auto": 6}.get(game_mode, 6)
     if len(members) < min_n:
         if game_mode == "self":
-            raise PollError(f"자체전은 8명 이상이어야 해요. (현재 {len(members)}명)\n6~7명이면 '팀짜기 매칭'으로 짜 주세요.")
+            raise PollError(f"자체전은 10명 이상이어야 해요. (현재 {len(members)}명)\n9명 이하면 '팀짜기 매칭'으로 짜 주세요.")
         raise PollError(f"팀을 짜려면 최소 {min_n}명이 필요해요. (현재 {len(members)}명)")
     start_squad(poll, game_mode)
     return (f"⚽ 팀 구성을 시작했어요. ({poll['title']}, {len(members)}명)\n"
@@ -1042,7 +1081,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1250,6 +1289,14 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return NEW_USAGE, []
         name, grades6, first, second = parsed
         return add_new_player(name, grades6, first, second), []
+
+    if cmd == "선출":  # 선출 홍길동 → 등록 / 선출 홍길동 해제 → 해제 / 선출 → 목록 (합산점수 40점 고정)
+        if not args:
+            names = _load_squad_module("grades.py").SEONCHUL_PLAYERS
+            return ("⭐ 선출 목록: " + ", ".join(names)) if names else "선출 목록이 비어 있어요.", []
+        if len(args) >= 2 and args[-1] in ("해제", "취소"):
+            return set_seonchul(" ".join(args[:-1]), False), []
+        return set_seonchul(" ".join(args), True), []
 
     if cmd == "등급":  # 등급 → 전체 등급표 / 등급 김민규 → 조회 / 등급 김민규 수비 A / 등급 김민규 B B A A B B
         args = [a for a in args if a != "등급"]  # 입력에 '등급' 단어가 섞여도 무시
