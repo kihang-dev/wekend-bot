@@ -847,6 +847,10 @@ def build_squad_html(members: list[str], game_mode: str = "auto", seven: bool = 
     spec.loader.exec_module(mod)
     # save_members=True: 투표 인원(보정된 이름)을 weekenders-futsal 의 members.py 에도 저장
     mod.SEVEN_V_SEVEN = seven  # 조남: 14명 자체를 7:7(벤치 0)로 짠다
+    # 팀 배정은 난수로 섞으므로, 인원·모드·7:7 여부로 시드를 고정해 같은 조건이면 팀이 바뀌지 않게 한다
+    import random, hashlib
+    seed_src = f"{','.join(sorted(members))}|{game_mode}|{seven}"
+    random.seed(int(hashlib.md5(seed_src.encode("utf-8")).hexdigest()[:8], 16))
     mod.generate_html(players=members, game_mode=game_mode, open_browser=False, save_members=True)
 
 
@@ -1214,6 +1218,10 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             if not sub_args:
                 return "사용법: 장소 [새 장소]", []
             poll = update_poll(room, place=" ".join(sub_args), no=no)
+            if is_closed(poll, now):  # 마감된 투표의 장소가 바뀌면 팀을 다시 짠다 (같은 인원·같은 규칙이면 팀은 그대로)
+                start_squad(poll, "auto")
+                return (f"{poll['no']}번 투표 장소를 {poll['place']}(으)로 바꿨어요.\n"
+                        "⚽ 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."), []
         elif sub == "날짜":
             if not sub_args or not parse_date(sub_args[0]):
                 get_poll(room)
