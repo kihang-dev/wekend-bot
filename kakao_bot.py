@@ -977,27 +977,35 @@ def publish_squad() -> bool:
 
 
 def clear_seonchul_locked() -> bool:
-    """grades.py 의 SEONCHUL_PLAYERS 를 비우고 GitHub 에 커밋·푸시한다. SQUAD_LOCK 을 잡은 상태에서 호출."""
+    """grades.py 의 SEONCHUL_PLAYERS 를 비우고 GitHub 에 커밋·푸시한다. SQUAD_LOCK 을 잡은 상태에서 호출.
+    순서: git pull → 목록 비우기 → 커밋 → push (거절되면 pull 후 한 번 더 push)."""
     import subprocess
+
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
+
     path = SQUAD_REPO / "grades.py"
     if not path.exists():
         print("선출 초기화 건너뜀: grades.py 없음")
+        return False
+    r = run("pull", "--rebase", "origin", "HEAD")  # 먼저 최신으로 받는다
+    if r.returncode != 0:
+        print("선출 초기화: pull 실패 (건너뜀):", r.stderr)
         return False
     src = path.read_text(encoding="utf-8")
     m = re.search(r"SEONCHUL_PLAYERS = \[(.*?)\]", src, re.S)
     if not m or not re.findall(r'^\s*"([^"]+)"', m.group(1), re.M):
         return False  # 이미 비어 있음
     path.write_text(src[:m.start()] + "SEONCHUL_PLAYERS = [\n]" + src[m.end():], encoding="utf-8")
-
-    def run(*args):
-        return subprocess.run(["git", *args], cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
-
     run("add", "grades.py")
     r = run("commit", "-m", "선출 목록 초기화 (마감)")
     if r.returncode != 0 and "nothing to commit" not in (r.stdout + r.stderr):
         print("선출 초기화 커밋 실패:", r.stderr)
         return False
     r = run("push", "origin", "HEAD")
+    if r.returncode != 0:  # 그 사이 원격이 바뀌었으면 받고 한 번 더 시도
+        run("pull", "--rebase", "origin", "HEAD")
+        r = run("push", "origin", "HEAD")
     if r.returncode != 0:
         print("선출 초기화 푸시 실패:", r.stderr)
         return False
