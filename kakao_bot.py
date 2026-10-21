@@ -801,7 +801,7 @@ def add_new_player(name: str, grades6: dict, first: str, second: str) -> str:
 PLACE_INFO = {
     "달월": {"addr": "경기 시흥시 월곶동 956-15", "img": "dalwol.jpeg"},
     "월곶": {"addr": "경기도 시흥시 월곶동 520-256", "img": "wolgot.png"},
-    "조남": {"addr": "경기도 시흥시 조남동 산19-1", "img": None},  # 조남은 7:7 로 짠다 (사진 없음)
+    "조남": {"addr": "경기도 시흥시 조남동 산19-1", "img": "jonam.png"},  # 조남은 7:7 로 짠다
 }
 
 
