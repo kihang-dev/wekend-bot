@@ -1461,6 +1461,8 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         poll = latest_poll_any_room()
         if poll is None:
             raise PollError(NO_POLL, 404)
+        if not is_closed(poll, now):  # 투표가 마감된 뒤에만 고정 조건을 정한다
+            return "같은팀/다른팀은 투표가 마감된 뒤에만 쓸 수 있어요. 먼저 투표를 마감해 주세요.", []
         att = list(poll["attend"].values())
         missing = [x for x in args if x not in att]
         if missing:
