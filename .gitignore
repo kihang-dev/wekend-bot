@@ -14,3 +14,5 @@ events.log
 
 # 자동 푸시 기록
 auto_push.log
+
+settings.json

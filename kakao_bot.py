@@ -48,6 +48,8 @@ WEEKLY_POLL = {
 
 }
 USERS_FILE = HERE / "users.json"
+SETTINGS_FILE = HERE / "settings.json"  # 경기 시간 같은 설정 (깃에 올리지 않음)
+DEFAULT_START_HOUR = 8
 LOG_FILE = HERE / "events.log"
 DEBUG = os.environ.get("DEBUG") == "1"
 
@@ -70,7 +72,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 [관리]
 · 참석 홍길동 김민규 / 불참 홍길동 — 참석·불참 바꾸기, 여러 명 가능 (마감 후면 팀 자동 재구성)
 · 장소 달월 — 장소 바꾸기
-· 날짜 261031 — 날짜 바꾸기
+· 날짜 261031 — 날짜 바꾸기\n· 시간 7 — 경기 시간 바꾸기 (7 → 07:00~09:00, 지각 체크 07시 01분)
 · 멤버 김기항 김민규 — 김기항 불참, 김민규 참석 (마감 후면 팀 자동 재구성)
 · 투표종료 — 지금 마감
 · 투표삭제 — 투표 삭제
@@ -811,11 +813,21 @@ def latest_poll_any_room() -> dict | None:
     return max(all_polls, key=_created)
 
 
-NOTICE_TIME_RULES = (
-    "⏰ 경기 시간: 08:00~10:00\n"
-    "- 지각 체크: 08시 01분부터\n"
-    "- 노쇼: 경기 시작 후 1시간 경과 시점부터"
-)
+def get_start_hour() -> int:
+    """경기 시작 시각(시). 설정이 없거나 잘못되면 기본 8시."""
+    try:
+        h = int(_load(SETTINGS_FILE).get("start_hour", DEFAULT_START_HOUR))
+    except (TypeError, ValueError):
+        return DEFAULT_START_HOUR
+    return h if 0 <= h <= 22 else DEFAULT_START_HOUR
+
+
+def notice_rules() -> str:
+    """경기 시간(2시간)과 지각 체크 시각을 설정값으로 만든다. 예) 7 → 07:00~09:00, 07시 01분부터"""
+    h = get_start_hour()
+    return (f"⏰ 경기 시간: {h:02d}:00~{h + 2:02d}:00\n"
+            f"- 지각 체크: {h:02d}시 01분부터\n"
+            "- 노쇼: 경기 시작 후 1시간 경과 시점부터")
 
 
 def make_squad(room: str) -> str:
@@ -827,7 +839,7 @@ def make_squad(room: str) -> str:
     parts = ["📢 이번 주 풋살 공지", f"👥 스쿼드 구성 페이지: {SQUAD_URL}"]
     if poll:
         parts.append(place_text(poll["place"]))
-    parts.append(NOTICE_TIME_RULES)
+    parts.append(notice_rules())
     parts.append("다들 늦지 않게 와주세요!")
     return "\n\n".join(parts)
 
@@ -1008,7 +1020,7 @@ def poll_summary(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1079,6 +1091,17 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
 
     if cmd == "도움말":
         return HELP_TEXT, []
+
+    if cmd == "시간":  # 시간 7 → 07:00~09:00 / 시간 10 → 10:00~12:00
+        h = get_start_hour()
+        if not args:
+            return f"⏰ 현재 경기 시간: {h:02d}:00~{h + 2:02d}:00\n사용법: 시간 7 (7:00~9:00으로 변경)", []
+        t = args[0].rstrip("시")
+        if not t.isdigit() or not 0 <= int(t) <= 22:
+            return "사용법: 시간 [시작 시각 0~22]\n예) 시간 7 → 07:00~09:00", []
+        _save(SETTINGS_FILE, {**_load(SETTINGS_FILE), "start_hour": int(t)})
+        h = int(t)
+        return f"⏰ 경기 시간을 {h:02d}:00~{h + 2:02d}:00으로 바꿨어요.", []
 
     if cmd == "이름":
         if not args:
