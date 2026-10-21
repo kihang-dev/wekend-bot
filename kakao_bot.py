@@ -65,25 +65,36 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 이름 홍길동 — 내 이름 등록
 · 연결 — 일반·오픈채팅방의 같은 사람 묶기 (코드 발급 후 다른 방에서 연결 코드 입력)
 
-[투표]
+[투표 참여]
 · 투표 — 진행중인 투표 보기
 · 참석 / 불참 — 최근 투표에 응답
 · 용병 홍길동 — 최근 투표에 용병 추가 (마감 후면 팀 자동 재구성)
 · 멤버 — 최근 투표 참석·불참 멤버 보기 (진행중·마감 모두)
 ※ 마감: 다음 주 수요일 23:00
 
-[관리]
+[투표 관리]
 · 참석 홍길동 김민규 / 불참 홍길동 — 참석·불참 바꾸기, 여러 명 가능 (마감 후면 팀 자동 재구성)
-· 장소 달월 — 장소 바꾸기
-· 날짜 261031 — 날짜 바꾸기\n· 시간 7 — 경기 시간 바꾸기 (7 → 07:00~09:00, 지각 체크 07시 01분)
 · 멤버 김기항 김민규 — 김기항 불참, 김민규 참석 (마감 후면 팀 자동 재구성)
+· 장소 달월 — 장소 바꾸기
+· 날짜 261031 — 날짜 바꾸기
+· 시간 7 — 경기 시간 바꾸기 (7 → 07:00~09:00, 지각 체크 07시 01분)
 · 투표종료 — 지금 마감
 · 투표삭제 — 투표 삭제
 · 투표조회 — 투표 목록
 
-[스쿼드]
+[팀 짜기]
 · 스쿼드 — 스쿼드 페이지 링크
-· 팀짜기 — 참석자로 팀 구성\n· 팀다시짜기 — 현재 참석자로 팀을 다시 구성\n· 팀짜기 매칭 — 무조건 매칭 (6명 이상)\n· 팀짜기 자체 — 무조건 자체 (10명 이상)\n· 같은팀 [이름1] [이름2] — 두 사람을 같은 팀으로 고정 (마감 후)\n· 다른팀 [이름1] [이름2] — 두 사람을 다른 팀으로 고정 (마감 후)\n· 팀삭제 [이름1] [이름2] — 두 사람의 같은팀/다른팀 고정 삭제 (마감 후)
+· 팀짜기 — 참석자로 팀 구성
+· 팀다시짜기 — 현재 참석자로 팀을 다시 구성
+· 팀짜기 매칭 — 무조건 매칭 (6명 이상)
+· 팀짜기 자체 — 무조건 자체 (10명 이상)
+
+[팀 고정] (마감 후에만)
+· 같은팀 [이름1] [이름2] — 두 사람을 같은 팀으로 고정
+· 다른팀 [이름1] [이름2] — 두 사람을 다른 팀으로 고정
+· 팀삭제 [이름1] [이름2] — 두 사람의 같은팀/다른팀 고정 삭제 / 팀삭제 — 고정 전체 초기화
+
+[명단·선수]
 · 명단 — 전체 명단 보기
 · 선출 홍길동 — 선출 등록 (합산점수 40점 고정, GitHub 반영) / 선출 홍길동 해제 / 선출 — 목록
 · 포지션 김기항 ST/LB — 선호 포지션 바꾸기"""
@@ -1132,6 +1143,8 @@ def update_fixed_pair_locked(kind: str, a: str, b: str) -> bool:
     spec.loader.exec_module(mod)
     same = [tuple(x) for x in getattr(mod, "FIXED_SAME_TEAM", [])]
     diff = [tuple(x) for x in getattr(mod, "FIXED_DIFF_TEAM", [])]
+    if kind == "all":  # 전체 초기화
+        same, diff = [], []
     same = [p for p in same if set(p) != {a, b}]
     diff = [p for p in diff if set(p) != {a, b}]
     if kind == "same":
@@ -1160,7 +1173,7 @@ def _fixed_job(title: str, members: list[str], kind: str, a: str, b: str, seven:
             pull_squad()
             if not update_fixed_pair_locked(kind, a, b):
                 return
-            push_squad(f"고정 조건 변경: {({'same': '같은팀', 'diff': '다른팀', 'none': '팀삭제'})[kind]} {a} {b}")
+            push_squad(f"고정 조건 변경: {({'same': '같은팀', 'diff': '다른팀', 'none': '팀삭제', 'all': '팀삭제 전체'})[kind]} {a} {b}")
             build_squad_html(members, "auto", seven)
             pushed = push_squad(f"팀 구성 업데이트: {title}")
             ok = publish_squad()
@@ -1456,9 +1469,23 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
     if cmd == "스쿼드":  # 스쿼드 페이지 주소만 안내
         return make_squad(room), []
 
+    if cmd == "팀삭제" and not args:  # 팀삭제 → 같은팀/다른팀 고정 전체 초기화
+        poll = latest_poll_any_room()
+        if poll is None:
+            raise PollError(NO_POLL, 404)
+        if not is_closed(poll, now):
+            return "같은팀/다른팀은 투표가 마감된 뒤에만 쓸 수 있어요. 먼저 투표를 마감해 주세요.", []
+        att = list(poll["attend"].values())
+        if len(att) < 6:
+            return f"팀을 짜려면 참석자가 6명 이상이어야 해요. (현재 {len(att)}명)", []
+        start_fixed_pair("all", "", "", poll)
+        return ("✅ 같은팀/다른팀 고정 조건을 모두 지웠어요.\n"
+                "⚽ 저장한 뒤 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n"
+                f"👉 {SQUAD_URL}"), []
+
     if cmd in ("같은팀", "다른팀", "팀삭제"):  # 팀삭제 김민규 김기항 → 두 사람의 고정 조건 삭제 / 같은팀 김민규 김기항 → 같은 팀 고정 / 다른팀 … → 다른 팀 고정 (저장 후 팀 다시 짜기)
         if len(args) != 2:
-            return "사용법: 같은팀 [이름1] [이름2] / 다른팀 [이름1] [이름2] / 팀삭제 [이름1] [이름2]\n예) 같은팀 김민규 김기항", []
+            return "사용법: 같은팀 [이름1] [이름2] / 다른팀 [이름1] [이름2] / 팀삭제 [이름1] [이름2] (전체 초기화는 팀삭제만)\n예) 같은팀 김민규 김기항", []
         if args[0] == args[1]:
             return "같은 사람끼리는 묶을 수 없어요.", []
         poll = latest_poll_any_room()
