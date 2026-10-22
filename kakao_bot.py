@@ -1568,6 +1568,8 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             p0 = (polls0.get(room) or [None])[-1] if no is None else find_by_no(polls0, room, no)
             if p0 is None:
                 raise PollError(NO_POLL, 404)
+            if in_name in p0["attend"].values():  # 들어올 사람이 이미 참석이면 교체 자체를 하지 않는다
+                return f"{in_name}님은 이미 참석 명단에 있어서 교체하지 않았어요.\n{poll_summary(p0)}", []
             changes, poll = [], p0
             if out_name in p0["attend"].values():
                 poll = set_attendance(room, out_name, SIDES["불참"], no=no)
