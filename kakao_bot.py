@@ -968,7 +968,7 @@ def push_squad(commit_msg: str) -> bool:
         return subprocess.run(["git", *args], cwd=SQUAD_REPO,
                               capture_output=True, text=True, timeout=60)
 
-    run("add", "index.html", "members.py")  # 인원 저장(members.py)도 같은 커밋에 포함
+    run("add", "members.py")  # index.html 은 푸시하지 않는다 (웹 폴더로만 복사). 인원 저장(members.py)만 커밋
     if not run("status", "--porcelain").stdout.strip():
         return True  # 변경 없음
     r = run("commit", "-m", commit_msg)
@@ -995,6 +995,16 @@ def pull_squad() -> None:
 SQUAD_LOCK = threading.Lock()  # 팀 구성은 한 번에 하나씩
 
 
+def restore_squad_html() -> None:
+    """생성된 index.html 의 변경을 레포에서 되돌린다 (푸시 대상이 아니므로 작업 흔적을 남기지 않는다)."""
+    import subprocess
+    try:
+        subprocess.run(["git", "checkout", "--", "index.html"], cwd=SQUAD_REPO,
+                       capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print("index.html 복원 경고:", repr(e))
+
+
 def publish_squad() -> bool:
     """만든 index.html 을 웹 서버 폴더로 복사한다 (GitHub push 없음). 성공하면 True."""
     import shutil
@@ -1003,6 +1013,11 @@ def publish_squad() -> bool:
         tmp = SQUAD_PUBLISH_DIR / "index.html.tmp"
         shutil.copyfile(SQUAD_REPO / "index.html", tmp)
         tmp.replace(SQUAD_PUBLISH_DIR / "index.html")  # 복사 도중 페이지가 깨지지 않도록 교체
+        # 봇 폴더(~/wekend-bot/index.html)에도 같은 파일을 복사한다
+        home_tmp = HERE / "index.html.tmp"
+        shutil.copyfile(SQUAD_REPO / "index.html", home_tmp)
+        home_tmp.replace(HERE / "index.html")
+        restore_squad_html()  # 레포의 index.html 은 만든 변경을 버리고 원래 상태로
         return True
     except OSError as e:
         print("squad 복사 실패:", repr(e))
