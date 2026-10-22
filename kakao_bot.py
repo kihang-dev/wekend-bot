@@ -39,7 +39,7 @@ SCHEDULE_FILE = HERE / "schedule.json"  # 자동 투표를 이미 만든 날짜 
 
 # 매주 토요일 10시에 자동으로 올리는 정기 투표 (날짜는 만드는 날로부터 다음 주 토요일)
 WEEKLY_POLL = {
-    "room": "bg2_YWwZGRLkPjp4l8ugIkYR8_tJG-zvoVAOew",
+    "room": "bg2_aT-gVOURKGGR8EANLPFAp3utsa0xQOu1Mw",
     "place": "월곶",
     "desc": "정기풋살",
     "weekday": 5,  # 토요일 (월=0)
