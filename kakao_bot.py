@@ -96,7 +96,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 팀삭제 — 고정 전체 초기화
 
 [명단·선수]
-· 명단 — 전체 명단 보기\n· 등급 참석 — 최근 투표 참석자 등급 한번에 보기
+· 명단 — 전체 명단 보기\n· 등급 참석 — 스쿼드용 명단(MEMBERS) 등급 한번에 보기
 · 선출 홍길동 — 선출 등록
 · 선출 홍길동 해제 — 선출 해제
 · 선출 — 선출 목록
@@ -1480,14 +1480,11 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
 
     if cmd == "등급":  # 등급 → 전체 등급표 / 등급 김민규 → 조회 / 등급 김민규 수비 A / 등급 김민규 B B A A B B
         args = [a for a in args if a != "등급"]  # 입력에 '등급' 단어가 섞여도 무시
-        if args == ["참석"]:  # 등급 참석 → 최근 투표 참석자(스쿼드용 명단)의 등급을 한번에
-            poll = latest_poll_any_room()
-            if poll is None:
-                raise PollError(NO_POLL, 404)
-            att = list(poll["attend"].values())
-            if not att:
-                return "아직 참석자가 없어요.", []
-            return grades_view_text(att), []
+        if args == ["참석"]:  # 등급 참석 → 스쿼드용 명단(weekenders-futsal 의 members.py MEMBERS) 등급을 한번에
+            names = list(getattr(_load_squad_module("members.py"), "MEMBERS", []))
+            if not names:
+                return "스쿼드용 명단(MEMBERS)이 비어 있어요.", []
+            return grades_view_text(names), []
         if not args:
             return grades_table_text(), []
         names = [a for a in args if a not in ("·", ",", "/")]
@@ -1639,9 +1636,10 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         # 카드 설명은 400자까지만 보이므로 짧게 쓴다. 버튼을 누르면 '@위켄봇 팀짜기'가 입력된다.
         text = (f"🔒 '{poll['title']}' 투표를 마감했습니다.\n"
                 f"참석 {len(att)}명: {', '.join(att) if att else '-'}")
-        if not att:
-            return text, []
-        start_squad(poll, "auto")  # 수동 마감: 팀 짜기 (선출 목록 유지, 버튼 없음)
+        if not att:  # 참석자가 없어도 스쿼드 명단은 마감 기준으로 비운다
+            start_squad(poll, "auto", reset_members=True)
+            return text + "\n\n📭 참석자가 없어서 스쿼드 명단을 비웠어요.", []
+        start_squad(poll, "auto", reset_members=True)  # 수동 마감: 명단 덮어쓰기(초기화 후 참석자로 팀 짜기)
         text += f"\n\n⚽ 팀을 자동으로 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n👉 {SQUAD_URL}"
         return text, []
 
