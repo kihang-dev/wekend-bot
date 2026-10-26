@@ -96,7 +96,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 팀삭제 — 고정 전체 초기화
 
 [명단·선수]
-· 명단 — 전체 명단 보기
+· 명단 — 전체 명단 보기\n· 등급 참석 — 최근 투표 참석자 등급 한번에 보기
 · 선출 홍길동 — 선출 등록
 · 선출 홍길동 해제 — 선출 해제
 · 선출 — 선출 목록
@@ -125,7 +125,7 @@ def poll_summary(p: dict) -> str:
     waiting = [n for n in roster_names() if n not in responded]
     if not waiting:
         return base
-    return base + f"\n⏳ 미응답 {len(waiting)}명: {', '.join(waiting)}"
+    return base + f"\n\n⏳ 미응답 {len(waiting)}명: {', '.join(waiting)}"
 
 
 def poll_reply(poll: dict, now: datetime | None, text: str) -> tuple[str, list]:
@@ -1233,8 +1233,8 @@ def _poll_summary_base(p: dict) -> str:
         f"🗳 {p.get('no', '')}번 · {p['title']}" + (f"\n📝 {p['desc']}" if p.get("desc") else ""),
         f"마감: {fmt_deadline(p['closed_at'] if p.get('closed_at') else p['deadline'])}"
         + (" (마감됨)" if p.get("closed_at") else ""),
-        f"참석 {len(att)}명: {', '.join(att) if att else '-'}",
-        f"불참 {len(absn)}명: {', '.join(absn) if absn else '-'}",
+        f"\n참석 {len(att)}명: {', '.join(att) if att else '-'}",
+        f"\n불참 {len(absn)}명: {', '.join(absn) if absn else '-'}",
     ])
 
 
@@ -1480,6 +1480,14 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
 
     if cmd == "등급":  # 등급 → 전체 등급표 / 등급 김민규 → 조회 / 등급 김민규 수비 A / 등급 김민규 B B A A B B
         args = [a for a in args if a != "등급"]  # 입력에 '등급' 단어가 섞여도 무시
+        if args == ["참석"]:  # 등급 참석 → 최근 투표 참석자(스쿼드용 명단)의 등급을 한번에
+            poll = latest_poll_any_room()
+            if poll is None:
+                raise PollError(NO_POLL, 404)
+            att = list(poll["attend"].values())
+            if not att:
+                return "아직 참석자가 없어요.", []
+            return grades_view_text(att), []
         if not args:
             return grades_table_text(), []
         names = [a for a in args if a not in ("·", ",", "/")]
