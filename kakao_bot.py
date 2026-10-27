@@ -48,6 +48,7 @@ WEEKLY_POLL = {
 
 }
 USERS_FILE = HERE / "users.json"
+ROOM_MEMBERS_FILE = HERE / "room_members.json"  # 방별 botUserKey -> 이름 (이 방에서 실제로 쓰인 키만)
 SETTINGS_FILE = HERE / "settings.json"  # 경기 시간 같은 설정 (깃에 올리지 않음)
 LINK_FILE = HERE / "link_codes.json"  # 일반/오픈채팅 연결용 임시 코드 (깃에 올리지 않음)
 LINKS_FILE = HERE / "links.json"  # 같은 사람으로 묶인 카톡 키 목록 {묶음번호: [키, ...]} (깃에 올리지 않음)
@@ -1271,8 +1272,35 @@ BOT_MENTION = "@위켄"  # 단체방에서 봇을 부르는 이름 (@위켄봇, 
 UNKNOWN_HINT = "❓ 알 수 없는 명령이에요.\n사용법은 @위켄봇 도움말 을 입력해주세요."
 
 
+def _remember_room_member(room: str, user_key: str) -> None:
+    """이 방에서 메시지를 보낸 등록자의 키를 기록한다 (멘션에 쓰려면 이 방의 키여야 한다)."""
+    if not room or not user_key:
+        return
+    name = _load(USERS_FILE).get(user_key)
+    if not name:
+        return
+    data = _load(ROOM_MEMBERS_FILE)
+    members = data.setdefault(room, {})
+    if members.get(user_key) != name:
+        members[user_key] = name
+        _save(ROOM_MEMBERS_FILE, data)
+
+
+def room_key_names(room: str) -> dict:
+    """이 방에서 유효한 {이름: botUserKey}. 투표 기록 + 이 방에서 보낸 메시지 기준."""
+    out = {}
+    for lst in (load_polls().get(room) or []):
+        for k, n in list(lst.get("attend", {}).items()) + list(lst.get("absent", {}).items()):
+            if n and k and not str(k).startswith("manual:"):
+                out.setdefault(n, k)
+    for k, n in (_load(ROOM_MEMBERS_FILE).get(room) or {}).items():
+        out.setdefault(n, k)
+    return out
+
+
 def handle(text: str, user_key: str, room: str, now: datetime | None = None) -> tuple[str, list] | None:
     """카톡 명령어를 처리하고 (답장 텍스트, 버튼 목록) 을 돌려준다. 명령어가 아니면 None."""
+    _remember_room_member(room, user_key)
     parsed = parse_command(text)
     if not parsed:
         # 봇을 불렀는데 명령을 모르면 도움말 안내 (일반 대화에는 답하지 않는다)
@@ -1320,8 +1348,24 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         waiting = [n for n in roster_names() if n not in responded]
         if not waiting:
             return "모두 응답했어요. 👏", []
-        return (f"⏳ 미응답 {len(waiting)}명: {', '.join(waiting)}\n"
-                f"참석 여부 부탁드려요! 마감: {fmt_deadline(poll['deadline'])}"), []
+        keys = room_key_names(room)  # 명령을 입력한 이 방에서 유효한 키
+        mentions, shown, plain = {}, [], []
+        for i, n in enumerate(waiting[:15]):  # 멘션은 한 답장에 최대 15명
+            k = keys.get(n)
+            if k:
+                tag = f"u{i}"
+                mentions[tag] = {"type": "botUserKey", "id": k}
+                shown.append("{{#mentions." + tag + "}}")
+            else:
+                shown.append(n)
+            plain.append(n)
+        head = f"⏳ 미응답 {len(waiting)}명: "
+        tail = f"\n참석 여부 부탁드려요! 마감: {fmt_deadline(poll['deadline'])}"
+        if mentions:
+            globals()["PENDING_MENTIONS"] = {"text": head + ", ".join(shown) + tail,
+                                             "plain": head + ", ".join(plain) + tail,
+                                             "mentions": mentions}
+        return head + ", ".join(plain) + tail, []
 
     if cmd == "방키":  # 이 방의 키 (정기 투표 방 설정용)
         return f"이 방의 키예요.\n{room}", []
@@ -2004,8 +2048,13 @@ async def heartbeat(ws, interval: float) -> None:
         await ws.send(json.dumps({"op": 1}))
 
 
+PENDING_MENTIONS = None  # 멘션 답장 준비 (미응답 명령이 설정, reply 가 사용 후 비움)
+
+
 async def reply(token: str, callback_token: str, text: str, buttons: list) -> None:
     """답장을 보낸다. 버튼이 있으면 카드로 먼저 시도하고, 거부되면 텍스트로 다시 보낸다."""
+    global PENDING_MENTIONS
+    pending, PENDING_MENTIONS = PENDING_MENTIONS, None
     import httpx
 
     headers = {"Authorization": f"KakaoAK {token}", "X-Bot-Callback-Token": callback_token}
@@ -2014,7 +2063,12 @@ async def reply(token: str, callback_token: str, text: str, buttons: list) -> No
         return {"skillResponse": {"version": "2.0", "template": {"outputs": outputs}}}
 
     bodies = [body_of([{"simpleText": {"text": text}}])]
-    if buttons:
+    if pending:  # 멘션 답장 → 실패하면 이름만 적힌 평문 답장
+        mention_body = {"skillResponse": {"version": "2.0",
+                                          "template": {"outputs": [{"simpleText": {"text": pending["text"]}}]},
+                                          "extra": {"mentions": pending["mentions"]}}}
+        bodies = [mention_body, body_of([{"simpleText": {"text": pending["plain"]}}])]
+    elif buttons:
         card = {"textCard": {"description": text[:400], "buttons": buttons}}
         bodies.insert(0, body_of([card]))
 
