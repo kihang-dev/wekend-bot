@@ -48,7 +48,8 @@ WEEKLY_POLL = {
 
 }
 USERS_FILE = HERE / "users.json"
-ROOM_MEMBERS_FILE = HERE / "room_members.json"  # 방별 botUserKey -> 이름 (이 방에서 실제로 쓰인 키만)
+ROOM_MEMBERS_FILE = HERE / "room_members.json"
+DORMANT_FILE = HERE / "dormant.json"  # 휴면 인원 (미응답 명단에서 제외)  # 방별 botUserKey -> 이름 (이 방에서 실제로 쓰인 키만)
 SETTINGS_FILE = HERE / "settings.json"  # 경기 시간 같은 설정 (깃에 올리지 않음)
 LINK_FILE = HERE / "link_codes.json"  # 일반/오픈채팅 연결용 임시 코드 (깃에 올리지 않음)
 LINKS_FILE = HERE / "links.json"  # 같은 사람으로 묶인 카톡 키 목록 {묶음번호: [키, ...]} (깃에 올리지 않음)
@@ -97,7 +98,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 팀삭제 — 고정 전체 초기화
 
 [명단·선수]
-· 명단 — 전체 명단 보기\n· 등급 참석 — 스쿼드용 명단(MEMBERS) 등급 한번에 보기
+· 명단 — 전체 명단 보기\n· 휴면 김기항 — 휴면 등록 (미응답에서 제외) / 휴면 김기항 해제 / 휴면 — 목록\n· 등급 참석 — 스쿼드용 명단(MEMBERS) 등급 한번에 보기
 · 선출 홍길동 — 선출 등록
 · 선출 홍길동 해제 — 선출 해제
 · 선출 — 선출 목록
@@ -110,10 +111,15 @@ def vote_buttons(poll: dict) -> list[dict]:
         {"label": "참석", "action": "message", "messageText": f"참석 #{poll['no']}"},
         {"label": "불참", "action": "message", "messageText": f"불참 #{poll['no']}"},
     ]
+def dormant_names() -> set:
+    """휴면 인원 목록 (미응답 명단에서 빠진다)."""
+    return set(_load(DORMANT_FILE).get("names", []))
+
+
 def roster_names() -> list[str]:
     """weekenders-futsal 명단 (grades.json 에 등록된 선수 전체). 못 읽으면 빈 목록."""
     try:
-        return list(_load_squad_module("grades.py").PLAYER_ABILITIES.keys())
+        return [n for n in _load_squad_module("grades.py").PLAYER_ABILITIES.keys() if n not in dormant_names()]
     except Exception as e:
         print("명단 읽기 실패 (미응답 표시 생략):", repr(e))
         return []
@@ -1239,7 +1245,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1341,6 +1347,21 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
 
     if cmd == "도움말":
         return HELP_TEXT, []
+
+    if cmd == "휴면":  # 휴면 김기항 김민규 → 미응답 명단에서 뺀다 / 휴면 김기항 해제 → 되돌림 / 휴면 → 목록
+        names = set(dormant_names())
+        if not args:
+            return ("휴면 인원: " + ", ".join(sorted(names))) if names else "휴면 인원이 없어요.", []
+        if args[0] == "해제" or args[-1] == "해제":  # 휴면 해제 김기항 / 휴면 김기항 해제 둘 다 가능
+            targets = [a for a in (args[1:] if args[0] == "해제" else args[:-1]) if a and a != "해제"]
+            if not targets:
+                return "사용법: 휴면 해제 김기항  (또는 휴면 김기항 해제)", []
+            names -= set(targets)
+            _save(DORMANT_FILE, {"names": sorted(names)})
+            return f"휴면 해제: {', '.join(targets)}", []
+        names |= set(args)
+        _save(DORMANT_FILE, {"names": sorted(names)})
+        return f"휴면 등록: {', '.join(args)} (미응답 명단에서 빠져요)", []
 
     if cmd == "미응답":  # 미응답 → 최근 투표에서 아직 참석·불참을 누르지 않은 사람 (이름 나열)
         poll = latest_poll_any_room()
