@@ -1722,17 +1722,29 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         return text, []
 
     if cmd == "투표조회":
-        if args and args[0] == "전체":  # 투표조회 전체 → 모든 방의 투표를 방별로
+        if args and args[0] == "전체":  # 투표조회 전체 → 방별 목록 / 투표조회 전체 1 2 → 1번 방의 2번 투표
+            rooms = [(r, lst) for r, lst in load_polls().items() if lst]
+            if not rooms:
+                raise PollError(NO_POLL, 404)
+            if len(args) >= 3:
+                if not (args[1].isdigit() and args[2].lstrip("#").rstrip("번").isdigit()):
+                    return "사용법: 투표조회 전체 [방번호] [투표번호]  예) 투표조회 전체 1 2", []
+                ri, pno = int(args[1]), int(args[2].lstrip("#").rstrip("번"))
+                if not 1 <= ri <= len(rooms):
+                    return f"방번호는 1~{len(rooms)} 사이로 입력해 주세요.", []
+                r, lst = rooms[ri - 1]
+                poll = next((p for p in lst if p.get("no") == pno), None)
+                if poll is None:
+                    return f"방 {ri}에는 {pno}번 투표가 없어요.", []
+                status = "🔒 마감" if is_closed(poll, now) else "🟢 진행중"
+                return f"[방 {ri} · {pno}번 · {status}]\n{poll_summary(poll)}", []
             blocks = []
-            for i, (r, lst) in enumerate(load_polls().items(), 1):
-                if not lst:
-                    continue
+            for i, (r, lst) in enumerate(rooms, 1):
                 lines = [f"{p.get('no')}번 {'🔒' if is_closed(p, now) else '🟢'} {p['title']} (참석 {len(p['attend'])}명)"
                          for p in lst]
                 blocks.append(f"[방 {i} · …{r[-6:]}]\n" + "\n".join(lines))
-            if not blocks:
-                raise PollError(NO_POLL, 404)
-            return "[전체 투표 목록] 🟢진행중 🔒마감\n\n" + "\n\n".join(blocks), []
+            return ("[전체 투표 목록] 🟢진행중 🔒마감\n\n" + "\n\n".join(blocks)
+                    + "\n\n상세: 투표조회 전체 방번호 투표번호  예) 투표조회 전체 1 2"), []
         if args:  # 투표조회 2 → 2번 투표 상세
             no = _parse_no(args[0])
             poll = get_poll_no(room, no)
