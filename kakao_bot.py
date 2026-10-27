@@ -1309,9 +1309,11 @@ def handle(text: str, user_key: str, room: str, now: datetime | None = None) -> 
         return None
     cmd, args = parsed
     try:
-        return _dispatch(cmd, args, user_key, room, now)
+        result = _dispatch(cmd, args, user_key, room, now)
     except PollError as e:
-        return e.message, []
+        result = (e.message, [])
+    _remember_room_member(room, user_key)  # 연결 등으로 이름이 방금 생긴 경우에도 이 방의 키를 기록한다
+    return result
 
 
 def _parse_no(s: str) -> int:
