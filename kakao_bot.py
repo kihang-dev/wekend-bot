@@ -69,7 +69,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 투표 — 진행중인 투표 보기
 · 참석 / 불참 — 최근 투표에 응답
 · 용병 홍길동 — 최근 투표에 용병 추가 (마감 후면 팀 자동 재구성)
-· 멤버 — 최근 투표 참석·불참 멤버 보기 (진행중·마감 모두)\n· 미응답 — 아직 응답하지 않은 사람 보기
+· 멤버 — 최근 투표 참석·불참 멤버 보기 (진행중·마감 모두)
 ※ 마감: 다음 주 수요일 23:00
 
 [투표 관리]
@@ -1238,7 +1238,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1311,36 +1311,6 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
 
     if cmd == "도움말":
         return HELP_TEXT, []
-
-    if cmd == "미응답":  # 미응답 → 최근 투표에서 아직 참석·불참을 누르지 않은 사람 (등록된 사람은 멘션)
-        poll = latest_poll_any_room()
-        if poll is None:
-            raise PollError(NO_POLL, 404)
-        responded = set(poll["attend"].values()) | set(poll["absent"].values())
-        waiting = [n for n in roster_names() if n not in responded]
-        if not waiting:
-            return f"{poll['no']}번 투표는 모두 응답했어요. 👏", []
-        users = _load(USERS_FILE)  # botUserKey -> 이름
-        name_to_key = {}
-        for k, n in users.items():
-            name_to_key.setdefault(n, k)
-        mentions, shown, plain = {}, [], []
-        for i, n in enumerate(waiting[:15]):  # 멘션은 한 답장에 최대 15명
-            k = name_to_key.get(n)
-            if k:
-                tag = f"u{i}"
-                mentions[tag] = {"type": "botUserKey", "id": k}
-                shown.append("{{#mentions." + tag + "}}")
-            else:
-                shown.append(n)
-            plain.append(n)
-        head = f"⏳ {poll['no']}번 투표 미응답 {len(waiting)}명: "
-        tail = f"\n참석 여부 부탁드려요! 마감: {fmt_deadline(poll['deadline'])}"
-        if mentions:  # reply() 가 이 값을 보고 멘션 답장을 먼저 시도한다
-            globals()["PENDING_MENTIONS"] = {"text": head + ", ".join(shown) + tail,
-                                             "plain": head + ", ".join(plain) + tail,
-                                             "mentions": mentions}
-        return head + ", ".join(plain) + tail, []
 
     if cmd == "방키":  # 이 방의 키 (정기 투표 방 설정용)
         return f"이 방의 키예요.\n{room}", []
@@ -2023,13 +1993,8 @@ async def heartbeat(ws, interval: float) -> None:
         await ws.send(json.dumps({"op": 1}))
 
 
-PENDING_MENTIONS = None  # 멘션 답장 준비 (미응답 명령이 설정, reply 가 사용 후 비움)
-
-
 async def reply(token: str, callback_token: str, text: str, buttons: list) -> None:
     """답장을 보낸다. 버튼이 있으면 카드로 먼저 시도하고, 거부되면 텍스트로 다시 보낸다."""
-    global PENDING_MENTIONS
-    pending, PENDING_MENTIONS = PENDING_MENTIONS, None
     import httpx
 
     headers = {"Authorization": f"KakaoAK {token}", "X-Bot-Callback-Token": callback_token}
@@ -2038,12 +2003,7 @@ async def reply(token: str, callback_token: str, text: str, buttons: list) -> No
         return {"skillResponse": {"version": "2.0", "template": {"outputs": outputs}}}
 
     bodies = [body_of([{"simpleText": {"text": text}}])]
-    if pending:  # 멘션 답장 → 실패하면 이름만 적힌 평문 답장
-        mention_body = {"skillResponse": {"version": "2.0",
-                                          "template": {"outputs": [{"simpleText": {"text": pending["text"]}}]},
-                                          "extra": {"mentions": pending["mentions"]}}}
-        bodies = [mention_body, body_of([{"simpleText": {"text": pending["plain"]}}])]
-    elif buttons:
+    if buttons:
         card = {"textCard": {"description": text[:400], "buttons": buttons}}
         bodies.insert(0, body_of([card]))
 
