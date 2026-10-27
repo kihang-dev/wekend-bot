@@ -1722,6 +1722,17 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         return text, []
 
     if cmd == "투표조회":
+        if args and args[0] == "전체":  # 투표조회 전체 → 모든 방의 투표를 방별로
+            blocks = []
+            for i, (r, lst) in enumerate(load_polls().items(), 1):
+                if not lst:
+                    continue
+                lines = [f"{p.get('no')}번 {'🔒' if is_closed(p, now) else '🟢'} {p['title']} (참석 {len(p['attend'])}명)"
+                         for p in lst]
+                blocks.append(f"[방 {i} · …{r[-6:]}]\n" + "\n".join(lines))
+            if not blocks:
+                raise PollError(NO_POLL, 404)
+            return "[전체 투표 목록] 🟢진행중 🔒마감\n\n" + "\n\n".join(blocks), []
         if args:  # 투표조회 2 → 2번 투표 상세
             no = _parse_no(args[0])
             poll = get_poll_no(room, no)
