@@ -71,7 +71,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 투표 — 진행중인 투표 보기
 · 참석 / 불참 — 최근 투표에 응답
 · 용병 홍길동 — 최근 투표에 용병 추가 (마감 후면 팀 자동 재구성)
-· 멤버 — 최근 투표 참석·불참 멤버 보기 (진행중·마감 모두)\n· 미응답 — 아직 응답하지 않은 사람 보기\n· 초대 — 위켄봇을 다른 채팅방에 초대하는 버튼 보기
+· 멤버 — 최근 투표 참석·불참 멤버 보기 (진행중·마감 모두)\n· 미응답 — 아직 응답하지 않은 사람 보기
 ※ 마감: 다음 주 수요일 23:00
 
 [투표 관리]
@@ -320,6 +320,11 @@ def has_open_poll(polls: dict, room: str, now: datetime | None = None) -> bool:
 
 def create_poll(room: str, date_str: str, place: str, creator: str,
                 now: datetime | None = None, desc: str = "") -> dict:
+    # 방과 상관없이 진행중인 투표가 있으면 새 투표를 만들지 않는다
+    for r, lst in load_polls().items():
+        for p in lst or []:
+            if not is_closed(p, now):
+                raise PollError(f"진행중인 투표가 있어서 새로 만들 수 없어요.\n{p['no']}번 · {p['title']} (마감 {fmt_deadline(p['deadline'])})\n마감된 뒤에 만들어 주세요.")
     date = parse_date(date_str)
     if not date:
         raise PollError("날짜는 YYMMDD 형식으로 입력해주세요. 예) 261017")
@@ -1245,7 +1250,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "초대"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1363,8 +1368,9 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         _save(DORMANT_FILE, {"names": sorted(names)})
         return f"휴면 등록: {', '.join(args)} (미응답 명단에서 빠져요)", []
 
-    if cmd == "미응답":  # 미응답 → 최근 투표에서 아직 참석·불참을 누르지 않은 사람 (이름 나열)
-        poll = latest_poll_any_room()
+    if cmd == "미응답":  # 미응답 → 진행중인 투표(방 무관) 에서 아직 참석·불참을 누르지 않은 사람 (이름 나열)
+        opened = [p for lst in load_polls().values() for p in (lst or []) if not is_closed(p, now)]
+        poll = max(opened, key=lambda p: datetime.fromisoformat(p.get("created") or "1900-01-01T00:00:00+09:00")) if opened else latest_poll_any_room()
         if poll is None:
             raise PollError(NO_POLL, 404)
         responded = set(poll["attend"].values()) | set(poll["absent"].values())
@@ -1389,11 +1395,6 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                                              "plain": head + ", ".join(plain) + tail,
                                              "mentions": mentions}
         return head + ", ".join(plain) + tail, []
-
-    if cmd == "초대":  # 초대 → 봇 초대 버튼
-        return ("아래 버튼을 눌러 위켄봇을 다른 채팅방에 초대할 수 있어요."), [
-            {"label": "다른 채팅방에 초대하기", "action": "invite"},
-        ]
 
     if cmd == "방키":  # 이 방의 키 (정기 투표 방 설정용)
         return f"이 방의 키예요.\n{room}", []
@@ -1994,7 +1995,10 @@ def make_weekly_poll(now: datetime) -> dict | None:
         return None
     if has_open_poll(polls, cfg["room"], now):  # 진행중인 투표가 있으면 이번 주는 건너뛴다
         return None
-    poll = create_poll(cfg["room"], poll_date, cfg["place"], "auto", now, desc=cfg["desc"])
+    try:
+        poll = create_poll(cfg["room"], poll_date, cfg["place"], "auto", now, desc=cfg["desc"])
+    except PollError:  # 다른 방에 진행중인 투표가 있으면 이번 주는 건너뛴다
+        return None
     marks["weekly"] = today
     _save(SCHEDULE_FILE, marks)
     print(f"정기 투표 생성: {poll['title']} #{poll['no']}")
