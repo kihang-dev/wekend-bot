@@ -1393,8 +1393,9 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         if mentions:
             globals()["PENDING_MENTIONS"] = {"text": head + ", ".join(shown) + tail,
                                              "plain": head + ", ".join(plain) + tail,
-                                             "mentions": mentions}
-        return head + ", ".join(plain) + tail, []
+                                             "mentions": mentions,
+                                             "card": "참석 여부를 아래 버튼으로 눌러 주세요."}
+        return head + ", ".join(plain) + tail, vote_buttons(poll)
 
     if cmd == "방키":  # 이 방의 키 (정기 투표 방 설정용)
         return f"이 방의 키예요.\n{room}", []
@@ -2107,7 +2108,8 @@ PENDING_MENTIONS = None  # 멘션 답장 준비 (미응답 명령이 설정, rep
 
 
 async def reply(token: str, callback_token: str, text: str, buttons: list) -> None:
-    """답장을 보낸다. 버튼이 있으면 카드로 먼저 시도하고, 거부되면 텍스트로 다시 보낸다."""
+    """답장을 보낸다. 멘션 답장은 텍스트를 먼저 보내고, 버튼이 있으면 카드를 따로 보낸다.
+    버튼 카드는 거부되면 텍스트로 다시 보낸다."""
     global PENDING_MENTIONS
     pending, PENDING_MENTIONS = PENDING_MENTIONS, None
     import httpx
@@ -2117,17 +2119,7 @@ async def reply(token: str, callback_token: str, text: str, buttons: list) -> No
     def body_of(outputs: list) -> dict:
         return {"skillResponse": {"version": "2.0", "template": {"outputs": outputs}}}
 
-    bodies = [body_of([{"simpleText": {"text": text}}])]
-    if pending:  # 멘션 답장 → 실패하면 이름만 적힌 평문 답장
-        mention_body = {"skillResponse": {"version": "2.0",
-                                          "template": {"outputs": [{"simpleText": {"text": pending["text"]}}]},
-                                          "extra": {"mentions": pending["mentions"]}}}
-        bodies = [mention_body, body_of([{"simpleText": {"text": pending["plain"]}}])]
-    elif buttons:
-        card = {"textCard": {"description": text[:400], "buttons": buttons}}
-        bodies.insert(0, body_of([card]))
-
-    async with httpx.AsyncClient() as client:
+    async def send_first_ok(client, bodies: list) -> None:
         for body in bodies:
             resp = await client.post(CALLBACK_URL, json=body, headers=headers)
             print("SENT:", resp.status_code, resp.text)
@@ -2137,8 +2129,25 @@ async def reply(token: str, callback_token: str, text: str, buttons: list) -> No
             except ValueError:
                 ok = False
             if ok:
-                break
+                return
 
+    async with httpx.AsyncClient() as client:
+        if pending:  # 멘션 답장 → 실패하면 이름만 적힌 평문 답장
+            mention_body = {"skillResponse": {"version": "2.0",
+                                              "template": {"outputs": [{"simpleText": {"text": pending["text"]}}]},
+                                              "extra": {"mentions": pending["mentions"]}}}
+            await send_first_ok(client, [mention_body, body_of([{"simpleText": {"text": pending["plain"]}}])])
+            if buttons:  # 참석·불참 버튼은 별도 카드로
+                card_text = pending.get("card", "아래 버튼을 눌러 주세요.")
+                await send_first_ok(client, [body_of([{"textCard": {"description": card_text, "buttons": buttons}}]),
+                                             body_of([{"simpleText": {"text": card_text}}])])
+            return
+
+        bodies = [body_of([{"simpleText": {"text": text}}])]
+        if buttons:
+            card = {"textCard": {"description": text[:400], "buttons": buttons}}
+            bodies.insert(0, body_of([card]))
+        await send_first_ok(client, bodies)
 
 if __name__ == "__main__":
     try:
