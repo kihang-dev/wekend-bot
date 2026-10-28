@@ -1309,6 +1309,34 @@ def room_key_names(room: str) -> dict:
     return out
 
 
+# 투표 상태를 바꾸거나 보는 명령은 방과 상관없이 '진행중인 투표'를 기준으로 한다
+POLL_SCOPED = {"참석", "불참", "투표종료", "투표삭제", "투표조회", "멤버", "장소", "날짜", "교체", "용병",
+               "팀짜기", "팀다시짜기", "시간", "같은팀", "다른팀", "팀삭제", "미응답"}
+
+
+def open_poll_room(now: datetime | None = None) -> str | None:
+    """진행중인 투표가 있는 방의 키 (여러 개면 가장 최근에 만든 것). 없으면 None."""
+    best = None
+    for r, lst in load_polls().items():
+        for p in lst or []:
+            if not is_closed(p, now):
+                created = p.get("created") or ""
+                if best is None or created > best[0]:
+                    best = (created, r)
+    return best[1] if best else None
+
+
+def _poll_room(cmd: str, args: list[str], room: str, now: datetime | None) -> str:
+    """이 명령이 다룰 투표가 있는 방. 투표 생성(인자 있는 '투표')은 입력한 방에 만든다."""
+    if cmd == "투표":
+        if args:  # 투표 날짜 장소 → 생성
+            return room
+        return open_poll_room(now) or room
+    if cmd in POLL_SCOPED:
+        return open_poll_room(now) or room
+    return room
+
+
 def handle(text: str, user_key: str, room: str, now: datetime | None = None) -> tuple[str, list] | None:
     """카톡 명령어를 처리하고 (답장 텍스트, 버튼 목록) 을 돌려준다. 명령어가 아니면 None."""
     _remember_room_member(room, user_key)
@@ -1319,8 +1347,9 @@ def handle(text: str, user_key: str, room: str, now: datetime | None = None) -> 
             return UNKNOWN_HINT, []
         return None
     cmd, args = parsed
+    scope = _poll_room(cmd, args, room, now)  # 진행중 투표가 있는 방 (없으면 이 방)
     try:
-        result = _dispatch(cmd, args, user_key, room, now)
+        result = _dispatch(cmd, args, user_key, scope, now, origin=room)
     except PollError as e:
         result = (e.message, [])
     _remember_room_member(room, user_key)  # 연결 등으로 이름이 방금 생긴 경우에도 이 방의 키를 기록한다
@@ -1338,7 +1367,8 @@ ALLOWED_NAMES = {"김민규", "이성학", "김기항"}  # 나머지 명령어�
 OPEN_COMMANDS = {"이름", "참석", "불참", "연결"}  # 이름 등록과 참석/불참은 누구나 쓸 수 있다
 
 
-def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime | None) -> tuple[str, list]:
+def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime | None,
+              origin: str | None = None) -> tuple[str, list]:
     if cmd in ("장소", "날짜") or (cmd == "멤버" and args):  # 수정 없이: 장소 달월 / 날짜 261031 / 멤버 김기항 김민규
         args, cmd = [cmd] + args, "수정"
     if cmd == "교체":  # 교체 김기항 김민규 → 김기항 불참, 김민규 참석 (멤버 수정과 같은 동작)
@@ -1377,7 +1407,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         waiting = [n for n in roster_names() if n not in responded]
         if not waiting:
             return "모두 응답했어요. 👏", []
-        keys = room_key_names(room)  # 명령을 입력한 이 방에서 유효한 키
+        keys = room_key_names(origin or room)  # 명령을 입력한 이 방에서 유효한 키
         mentions, shown, plain = {}, [], []
         for i, n in enumerate(waiting[:15]):  # 멘션은 한 답장에 최대 15명
             k = keys.get(n)
@@ -1729,6 +1759,8 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         return text, []
 
     if cmd == "투표조회":
+        if not args:  # 투표조회 → 전체 방의 투표 목록 (방과 상관없이)
+            args = ["전체"]
         if args and args[0] == "전체":  # 투표조회 전체 → 방별 목록 / 투표조회 전체 1 2 → 1번 방의 2번 투표
             rooms = [(r, lst) for r, lst in load_polls().items() if lst]
             if not rooms:
