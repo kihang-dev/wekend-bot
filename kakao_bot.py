@@ -2009,7 +2009,11 @@ async def watch_updates(start_head: str, stop: asyncio.Event) -> None:
             stop.set()
 
 
-def make_weekly_poll(now: datetime) -> dict | None:
+class WeeklySkipped(Exception):
+    """이번 주 정기 투표를 진행중인 투표 때문에 건너뛰었다."""
+
+
+def _make_weekly_poll(now: datetime) -> dict | None:
     """토요일 10시대에 정기 투표를 한 번만 만든다. 만들었으면 그 투표, 아니면 None."""
     cfg = WEEKLY_POLL
     if now.weekday() != cfg["weekday"] or now.hour != cfg["hour"] or now.minute != cfg["minute"]:
@@ -2027,22 +2031,141 @@ def make_weekly_poll(now: datetime) -> dict | None:
         _save(SCHEDULE_FILE, marks)
         return None
     if has_open_poll(polls, cfg["room"], now):  # 진행중인 투표가 있으면 이번 주는 건너뛴다
-        return None
+        marks["weekly"] = today
+        _save(SCHEDULE_FILE, marks)
+        raise WeeklySkipped()
     try:
         poll = create_poll(cfg["room"], poll_date, cfg["place"], "auto", now, desc=cfg["desc"])
     except PollError:  # 다른 방에 진행중인 투표가 있으면 이번 주는 건너뛴다
-        return None
+        marks["weekly"] = today
+        _save(SCHEDULE_FILE, marks)
+        raise WeeklySkipped()
     marks["weekly"] = today
     _save(SCHEDULE_FILE, marks)
     print(f"정기 투표 생성: {poll['title']} #{poll['no']}")
     return poll
 
 
-async def weekly_poll_loop(stop: asyncio.Event) -> None:
+REMINDER_ON = os.environ.get("REMINDER_ON") == "1"  # .env 에 REMINDER_ON=1 일 때만 알림을 보낸다
+REMIND_BEFORE = timedelta(hours=1)  # 마감 1시간 전 (마감 23:00 → 22:00)
+
+
+def weekly_tick(now: datetime) -> tuple[str, dict | None]:
+    """정기 투표를 확인하고 결과를 돌려준다: ('created', 투표) / ('skipped', None) / ('', None)."""
+    try:
+        poll = _make_weekly_poll(now)
+    except WeeklySkipped:
+        return "skipped", None
+    return ("created", poll) if poll else ("", None)
+
+
+async def send_weekly_notice(token: str, poll: dict) -> None:
+    """정기 투표가 열렸다는 안내와 참석/불참 버튼을 보낸다."""
+    mm, dd = poll["date"][2:4], poll["date"][4:6]
+    text = (f"🗳 다음 주 토요일({mm}/{dd}) 정기풋살 투표가 열렸어요.\n"
+            f"장소 {poll['place']} · 마감 {fmt_deadline(poll['deadline'])}")
+    await send_room_message(token, WEEKLY_POLL["room"], text, {}, vote_buttons(poll))
+
+
+async def send_weekly_skipped(token: str) -> None:
+    await send_room_message(token, WEEKLY_POLL["room"],
+                            "이번 주 정기 투표는 진행중인 투표가 있어서 건너뛰었어요.", {}, [])
+
+
+async def send_room_message(token: str, room: str, text: str, mentions: dict, buttons: list) -> None:
+    """봇이 방에 먼저 메시지를 보낸다 (/v1/bot/send_message). 멘션이 실패하면 평문으로 한 번 더 보낸다."""
+    import httpx
+
+    headers = {"Authorization": f"KakaoAK {token}", "Content-Type": "application/json"}
+
+    def body(outputs: list, extra: dict | None = None) -> dict:
+        sr = {"version": "2.0", "template": {"outputs": outputs}}
+        if extra:
+            sr["extra"] = extra
+        return {"botGroupKey": room, "skillResponse": sr}
+
+    async with httpx.AsyncClient() as client:
+        bodies = [body([{"simpleText": {"text": text}}], {"mentions": mentions} if mentions else None)]
+        for b in bodies:
+            resp = await client.post("https://kapi.kakao.com/v1/bot/send_message", json=b, headers=headers)
+            print("REMIND SENT:", resp.status_code, resp.text)
+            try:
+                ok = resp.status_code == 200 and resp.json().get("errorCount", 0) == 0
+            except ValueError:
+                ok = False
+            if ok:
+                break
+        else:
+            plain = {"botGroupKey": room, "skillResponse": {"version": "2.0", "template": {"outputs": [
+                {"simpleText": {"text": text}}]}}}
+            await client.post("https://kapi.kakao.com/v1/bot/send_message", json=plain, headers=headers)
+        if buttons:  # 참석·불참 버튼은 별도 카드로
+            card = {"textCard": {"description": "참석 여부를 아래 버튼으로 눌러 주세요.", "buttons": buttons}}
+            resp = await client.post("https://kapi.kakao.com/v1/bot/send_message",
+                                     json=body([card]), headers=headers)
+            print("REMIND CARD:", resp.status_code, resp.text)
+
+
+def reminder_due(now: datetime) -> list[tuple[str, dict]]:
+    """지금 마감 1시간 전~마감 전 사이이고 아직 알림을 안 보낸 진행중 투표 목록 (방, 투표)."""
+    marks = _load(SCHEDULE_FILE)
+    sent = set(marks.get("reminded", []))
+    due = []
+    for room, lst in load_polls().items():
+        for p in lst or []:
+            if p.get("id") in sent or is_closed(p, now):
+                continue
+            deadline = datetime.fromisoformat(p["deadline"])
+            if deadline - REMIND_BEFORE <= now < deadline:
+                due.append((room, p))
+    return due
+
+
+async def remind_unanswered_loop(token: str, stop: asyncio.Event) -> None:
+    """30초마다 확인해서 마감 1시간 전 미응답 알림을 보낸다 (투표당 한 번)."""
+    while not stop.is_set():
+        if REMINDER_ON:
+            now = now_kst()
+            for room, p in reminder_due(now):
+                try:
+                    responded = set(p["attend"].values()) | set(p["absent"].values())
+                    waiting = [n for n in roster_names() if n not in responded]
+                    marks = _load(SCHEDULE_FILE)
+                    marks.setdefault("reminded", []).append(p["id"])  # 먼저 표시해서 중복 발송을 막는다
+                    _save(SCHEDULE_FILE, marks)
+                    if not waiting:
+                        continue
+                    keys = room_key_names(room)
+                    mentions, shown = {}, []
+                    for i, n in enumerate(waiting[:15]):  # 멘션은 한 답장에 최대 15명
+                        k = keys.get(n)
+                        if k:
+                            tag = f"u{i}"
+                            mentions[tag] = {"type": "botUserKey", "id": k}
+                            shown.append("{{#mentions." + tag + "}}")
+                        else:
+                            shown.append(n)
+                    text = (f"⏰ 마감 1시간 전이에요! 아직 응답하지 않은 분 {len(waiting)}명: "
+                            + ", ".join(shown)
+                            + f"\n'{p['title']}' 참석 여부 부탁드려요. 마감: {fmt_deadline(p['deadline'])}")
+                    await send_room_message(token, room, text, mentions, vote_buttons(p))
+                except Exception as e:
+                    print("미응답 알림 오류:", repr(e))
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            pass
+
+
+async def weekly_poll_loop(token: str, stop: asyncio.Event) -> None:
     """30초마다 시간을 확인해서 정기 투표를 만든다 (1분에 최소 두 번 확인하므로 놓치지 않는다)."""
     while not stop.is_set():
         try:
-            make_weekly_poll(now_kst())
+            kind, poll = weekly_tick(now_kst())
+            if REMINDER_ON and kind == "created":
+                await send_weekly_notice(token, poll)
+            elif REMINDER_ON and kind == "skipped":
+                await send_weekly_skipped(token)
         except Exception as e:
             print("정기 투표 오류:", repr(e))
         try:
@@ -2070,7 +2193,8 @@ async def main() -> int:
     if start_head:
         asyncio.create_task(watch_updates(start_head, stop))
     api_task = asyncio.create_task(serve_api(stop))
-    weekly_task = asyncio.create_task(weekly_poll_loop(stop))
+    weekly_task = asyncio.create_task(weekly_poll_loop(token, stop))
+    reminder_task = asyncio.create_task(remind_unanswered_loop(token, stop))
 
     retry = 1
     while not stop.is_set():
@@ -2085,6 +2209,7 @@ async def main() -> int:
             retry = min(retry * 2, 60)
     await api_task
     await weekly_task
+    await reminder_task
     return UPDATE_EXIT_CODE
 
 
