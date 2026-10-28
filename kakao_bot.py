@@ -2111,13 +2111,13 @@ def reminder_due(now: datetime) -> list[tuple[str, dict]]:
     marks = _load(SCHEDULE_FILE)
     sent = set(marks.get("reminded", []))
     due = []
-    for room, lst in load_polls().items():
-        for p in lst or []:
-            if p.get("id") in sent or is_closed(p, now):
-                continue
-            deadline = datetime.fromisoformat(p["deadline"])
-            if deadline - REMIND_BEFORE <= now < deadline:
-                due.append((room, p))
+    room = WEEKLY_POLL["room"]  # 미응답 알림은 정기 투표 방에서만 보낸다
+    for p in load_polls().get(room) or []:
+        if p.get("id") in sent or is_closed(p, now):
+            continue
+        deadline = datetime.fromisoformat(p["deadline"])
+        if deadline - REMIND_BEFORE <= now < deadline:
+            due.append((room, p))
     return due
 
 
