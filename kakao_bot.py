@@ -318,6 +318,18 @@ def has_open_poll(polls: dict, room: str, now: datetime | None = None) -> bool:
     return any(not is_closed(p, now) for p in polls.get(room) or [])
 
 
+def remember_place(place: str, now: datetime | None = None) -> None:
+    """가장 최근에 정한 장소를 기록한다 (투표 생성·장소 변경 때마다 갱신)."""
+    marks = _load(SCHEDULE_FILE)
+    marks["last_place"] = {"place": place, "at": (now or now_kst()).isoformat()}
+    _save(SCHEDULE_FILE, marks)
+
+
+def last_place() -> str:
+    """정기 투표에 쓸 기본 장소: 가장 최근에 정한 장소, 없으면 WEEKLY_POLL 기본값."""
+    return (_load(SCHEDULE_FILE).get("last_place") or {}).get("place") or WEEKLY_POLL["place"]
+
+
 def create_poll(room: str, date_str: str, place: str, creator: str,
                 now: datetime | None = None, desc: str = "") -> dict:
     # 방과 상관없이 진행중인 투표가 있으면 새 투표를 만들지 않는다
@@ -351,6 +363,7 @@ def create_poll(room: str, date_str: str, place: str, creator: str,
     _retitle(poll)
     polls.setdefault(room, []).append(poll)
     _save(POLLS_FILE, polls)
+    remember_place(poll["place"], now)
     return poll
 
 
@@ -419,6 +432,7 @@ def update_poll(room: str, date_str: str | None = None, place: str | None = None
         if not place.strip():
             raise PollError("장소를 입력해주세요.")
         poll["place"] = place.strip()
+        remember_place(poll["place"])
     _retitle(poll)
     _save(POLLS_FILE, polls)
     return poll
@@ -2035,7 +2049,7 @@ def _make_weekly_poll(now: datetime) -> dict | None:
         _save(SCHEDULE_FILE, marks)
         raise WeeklySkipped()
     try:
-        poll = create_poll(cfg["room"], poll_date, cfg["place"], "auto", now, desc=cfg["desc"])
+        poll = create_poll(cfg["room"], poll_date, last_place(), "auto", now, desc=cfg["desc"])
     except PollError:  # 다른 방에 진행중인 투표가 있으면 이번 주는 건너뛴다
         marks["weekly"] = today
         _save(SCHEDULE_FILE, marks)
