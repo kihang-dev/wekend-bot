@@ -21,6 +21,7 @@ REST API (.env 에 API_KEY 를 넣으면 켜짐, 문서: http://서버:8000/docs
   모든 요청에 헤더  X-API-Key: <API_KEY>  필요
 """
 import asyncio
+import copy
 import json
 import os
 import secrets
@@ -318,6 +319,45 @@ def has_open_poll(polls: dict, room: str, now: datetime | None = None) -> bool:
     return any(not is_closed(p, now) for p in polls.get(room) or [])
 
 
+def _actor_name(key: str) -> str:
+    """이력에 남길 행위자 이름 (등록된 이름, 없으면 키 끝 6자리, 자동이면 '자동')."""
+    if not key or key == "auto":
+        return "자동"
+    return _load(USERS_FILE).get(key) or key[-6:]
+
+
+def record_history(before: dict, actor: str, cmd: str, now: datetime) -> None:
+    """명령 실행 전(before)과 후를 비교해 바뀐 내용을 투표의 변경 이력에 남긴다."""
+    polls = load_polls()
+    bmap = {p.get("id"): p for lst in before.values() for p in lst or [] if p.get("id")}
+    changed = False
+    for lst in polls.values():
+        for p in lst or []:
+            b = bmap.get(p.get("id"))
+            if b is None:  # 새로 만든 투표는 create_poll 에서 이미 기록한다
+                continue
+            entries = []
+            for side, label in (("attend", "참석"), ("absent", "불참")):
+                bn = set(b.get(side, {}).values())
+                an = set(p.get(side, {}).values())
+                if an - bn:
+                    entries.append(f"{label} 추가: {', '.join(sorted(an - bn))}")
+                if bn - an:
+                    entries.append(f"{label} 취소: {', '.join(sorted(bn - an))}")
+            if b.get("place") != p.get("place"):
+                entries.append(f"장소: {b.get('place')} → {p.get('place')}")
+            if b.get("date") != p.get("date"):
+                entries.append(f"날짜: {b.get('date')} → {p.get('date')}")
+            if not b.get("closed_at") and p.get("closed_at"):
+                entries.append("마감")
+            if entries:
+                p.setdefault("history", []).append(
+                    {"at": now.isoformat(), "by": actor, "cmd": cmd, "changes": entries})
+                changed = True
+    if changed:
+        _save(POLLS_FILE, polls)
+
+
 def remember_place(place: str, now: datetime | None = None) -> None:
     """가장 최근에 정한 장소를 기록한다 (투표 생성·장소 변경 때마다 갱신)."""
     marks = _load(SCHEDULE_FILE)
@@ -361,6 +401,8 @@ def create_poll(room: str, date_str: str, place: str, creator: str,
         "start_hour": DEFAULT_START_HOUR,  # 새 투표는 기본 8시 (시간 명령으로 이 투표만 바꿀 수 있음)
     }
     _retitle(poll)
+    poll["history"] = [{"at": poll["created"], "by": _actor_name(creator), "cmd": "투표",
+                        "changes": [f"투표 생성: {poll['title']}"]}]
     polls.setdefault(room, []).append(poll)
     _save(POLLS_FILE, polls)
     remember_place(poll["place"], now)
@@ -1151,6 +1193,8 @@ def close_due_polls(now: datetime) -> list[tuple[str, dict]]:
             if timedelta(0) <= passed < timedelta(minutes=10):
                 p["closed_at"] = p["deadline"]
                 p["squad_at"] = now.isoformat()
+                p.setdefault("history", []).append(
+                    {"at": now.isoformat(), "by": "자동", "cmd": "자동 마감", "changes": ["마감"]})
                 started.append((room, p))
     if started:
         _save(POLLS_FILE, polls)
@@ -1264,7 +1308,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1324,7 +1368,7 @@ def room_key_names(room: str) -> dict:
 
 
 # 투표 상태를 바꾸거나 보는 명령은 방과 상관없이 '진행중인 투표'를 기준으로 한다
-POLL_SCOPED = {"참석", "불참", "투표종료", "투표삭제", "투표조회", "멤버", "장소", "날짜", "교체", "용병",
+POLL_SCOPED = {"참석", "불참", "투표종료", "투표삭제", "투표조회", "이력", "멤버", "장소", "날짜", "교체", "용병",
                "팀짜기", "팀다시짜기", "시간", "같은팀", "다른팀", "팀삭제", "미응답"}
 
 
@@ -1362,10 +1406,15 @@ def handle(text: str, user_key: str, room: str, now: datetime | None = None) -> 
         return None
     cmd, args = parsed
     scope = _poll_room(cmd, args, room, now)  # 진행중 투표가 있는 방 (없으면 이 방)
+    before = copy.deepcopy(load_polls())
     try:
         result = _dispatch(cmd, args, user_key, scope, now, origin=room)
     except PollError as e:
         result = (e.message, [])
+    try:
+        record_history(before, _actor_name(user_key), cmd, now or now_kst())
+    except Exception as e:  # 이력 기록 실패가 명령 응답을 막지 않도록
+        print("이력 기록 오류:", repr(e))
     _remember_room_member(room, user_key)  # 연결 등으로 이름이 방금 생긴 경우에도 이 방의 키를 기록한다
     return result
 
@@ -1767,6 +1816,37 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         start_squad(poll, "auto", reset_members=True)  # 수동 마감: 명단 덮어쓰기(초기화 후 참석자로 팀 짜기)
         return text + f"\n\n⚽ 팀을 자동으로 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.", []
 
+    if cmd == "정기":  # 정기 → 현재 설정 / 정기 토 10:00 → 매주 토요일 10:00 에 정기 투표 생성
+        sched = weekly_schedule()
+        now_txt = f"{WEEKDAY_CHARS[sched['weekday']]}요일 {sched['hour']:02d}:{sched['minute']:02d}"
+        if not args:
+            return f"정기 투표는 매주 {now_txt}에 자동으로 만들어져요.\n변경: 정기 토 10:00", []
+        if len(args) < 2:
+            raise PollError("사용법: 정기 요일 시각  예) 정기 토 10:00")
+        day = args[0].replace("요일", "")
+        if day not in WEEKDAY_CHARS or len(day) != 1:
+            raise PollError("요일은 월~일 중에서 입력해주세요. 예) 정기 토 10:00")
+        t = args[1].replace("시", "")
+        h_txt, _, m_txt = t.partition(":")
+        if not (h_txt.isdigit() and (m_txt == "" or m_txt.isdigit())):
+            raise PollError("시각은 HH:MM 형식으로 입력해주세요. 예) 정기 토 10:00")
+        h, m = int(h_txt), int(m_txt or 0)
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise PollError("시각이 올바르지 않아요. 예) 정기 토 10:00")
+        marks = _load(SCHEDULE_FILE)
+        marks["weekly_schedule"] = {"weekday": WEEKDAY_CHARS.index(day), "hour": h, "minute": m}
+        _save(SCHEDULE_FILE, marks)
+        return f"정기 투표 시각을 매주 {day}요일 {h:02d}:{m:02d}으로 바꿨어요.", []
+
+    if cmd == "이력":  # 이력 → 진행중(또는 최근) 투표의 변경 이력 / 이력 2 → 2번 투표
+        poll = get_poll_no(room, _parse_no(args[0])) if args else get_poll(room)
+        hist = poll.get("history") or []
+        if not hist:
+            return f"'{poll['title']}' 투표의 변경 이력이 없어요.", []
+        lines = [f"{h['at'][5:16].replace('T', ' ')} {h['by']} · {h['cmd']}: {'; '.join(h['changes'])}"
+                 for h in hist[-20:]]
+        return f"[{poll['title']} 변경 이력]\n" + "\n".join(lines), []
+
     if cmd == "투표조회":
         if not args:  # 투표조회 → 전체 방의 투표 목록 (방과 상관없이)
             args = ["전체"]
@@ -2022,17 +2102,28 @@ class WeeklySkipped(Exception):
     """이번 주 정기 투표를 진행중인 투표 때문에 건너뛰었다."""
 
 
+WEEKDAY_CHARS = "월화수목금토일"  # 인덱스 = datetime.weekday() (월=0)
+
+
+def weekly_schedule() -> dict:
+    """정기 투표 요일·시각: '정기' 명령으로 바꾼 값이 있으면 그 값, 없으면 WEEKLY_POLL 기본값."""
+    base = {"weekday": WEEKLY_POLL["weekday"], "hour": WEEKLY_POLL["hour"], "minute": WEEKLY_POLL["minute"]}
+    base.update(_load(SCHEDULE_FILE).get("weekly_schedule") or {})
+    return base
+
+
 def _make_weekly_poll(now: datetime) -> dict | None:
     """토요일 10시대에 정기 투표를 한 번만 만든다. 만들었으면 그 투표, 아니면 None."""
     cfg = WEEKLY_POLL
-    if now.weekday() != cfg["weekday"] or now.hour != cfg["hour"] or now.minute != cfg["minute"]:
+    sched = weekly_schedule()
+    if now.weekday() != sched["weekday"] or now.hour != sched["hour"] or now.minute != sched["minute"]:
         return None
     today = now.date().isoformat()
     marks = _load(SCHEDULE_FILE)
     if marks.get("weekly") == today:  # 오늘 이미 만듦
         return None
     # 다음 주 토요일: 오늘 이후 가장 가까운 토요일 (토요일에 만들면 +7일, 일요일에 만들면 +6일)
-    ahead = (5 - now.weekday()) % 7 or 7
+    ahead = (sched["weekday"] - now.weekday()) % 7 or 7
     poll_date = (now.date() + timedelta(days=ahead)).strftime("%y%m%d")
     polls = load_polls()
     if any(p["date"] == poll_date for p in polls.get(cfg["room"]) or []):
@@ -2071,7 +2162,8 @@ def weekly_tick(now: datetime) -> tuple[str, dict | None]:
 async def send_weekly_notice(token: str, poll: dict) -> None:
     """정기 투표가 열렸다는 안내와 참석/불참 버튼을 보낸다."""
     mm, dd = poll["date"][2:4], poll["date"][4:6]
-    text = (f"🗳 다음 주 토요일({mm}/{dd}) 정기풋살 투표가 열렸어요.\n"
+    wd = WEEKDAY_CHARS[datetime.strptime(poll["date"], "%y%m%d").weekday()]
+    text = (f"🗳 다음 주 {wd}요일({mm}/{dd}) 정기풋살 투표가 열렸어요.\n"
             f"마감 {fmt_deadline(poll['deadline'])}")
     await send_room_message(token, WEEKLY_POLL["room"], text, {}, vote_buttons(poll))
 
