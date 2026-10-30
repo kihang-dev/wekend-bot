@@ -151,7 +151,7 @@ def _regen_or_card(poll: dict, now: datetime | None, text: str, regen: bool) -> 
     """마감된 투표의 참석자가 바뀌었으면 팀을 백그라운드로 자동 재구성한다 (버튼 없음). 진행 중이면 투표 카드."""
     if regen and is_closed(poll, now):
         start_squad(poll, "auto")
-        return f"{text}\n⚽ 팀을 자동으로 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n👉 {SQUAD_URL}", []
+        return f"{text}\n⚽ 팀을 자동으로 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.", []
     return poll_reply(poll, now, text)
 
 
@@ -1139,11 +1139,11 @@ def mark_squad_started(poll_id: str, now: datetime) -> dict | None:
     return None
 
 
-def close_due_polls(now: datetime) -> int:
+def close_due_polls(now: datetime) -> list[tuple[str, dict]]:
     """마감 시각이 막 지난(10분 이내) 투표를 마감 처리하고 팀을 짠다. 예전 투표는 건드리지 않는다."""
     polls = load_polls()
     started = []
-    for lst in polls.values():
+    for room, lst in polls.items():
         for p in lst:
             if p.get("closed_at") or p.get("squad_at"):
                 continue
@@ -1151,12 +1151,12 @@ def close_due_polls(now: datetime) -> int:
             if timedelta(0) <= passed < timedelta(minutes=10):
                 p["closed_at"] = p["deadline"]
                 p["squad_at"] = now.isoformat()
-                started.append(p)
+                started.append((room, p))
     if started:
         _save(POLLS_FILE, polls)
-        for p in started:
+        for _, p in started:
             start_squad(p, reset_members=True)  # 기본 마감: 명단 초기화 → 참석자 추가 → 팀짜기
-    return len(started)
+    return started
 
 
 def fix_open_deadlines(now: datetime) -> int:
@@ -1643,8 +1643,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return f"팀을 짜려면 참석자가 6명 이상이어야 해요. (현재 {len(att)}명)", []
         start_fixed_pair("all", "", "", poll)
         return ("✅ 같은팀/다른팀 고정 조건을 모두 지웠어요.\n"
-                "⚽ 저장한 뒤 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n"
-                f"👉 {SQUAD_URL}"), []
+                "⚽ 저장한 뒤 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."), []
 
     if cmd in ("같은팀", "다른팀", "팀삭제"):  # 팀삭제 김민규 김기항 → 두 사람의 고정 조건 삭제 / 같은팀 김민규 김기항 → 같은 팀 고정 / 다른팀 … → 다른 팀 고정 (저장 후 팀 다시 짜기)
         if len(args) != 2:
@@ -1670,8 +1669,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             word = "같은 팀" if kind == "same" else "다른 팀"
             head = f"✅ {args[0]} · {args[1]} → {word}으로 고정했어요."
         return (f"{head}\n"
-                f"⚽ 저장한 뒤 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n"
-                f"👉 {SQUAD_URL}"), []
+                f"⚽ 저장한 뒤 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."), []
 
     if cmd in ("팀짜기", "팀다시짜기"):  # 팀다시짜기 = 같은 동작 (현재 참석자로 팀을 다시 짜고 members.py 교체)
         # 팀짜기 → 최근 투표 참석자로 자동 모드(인원 따라 매칭/자체) / 팀짜기 2 → 2번 투표
@@ -1705,8 +1703,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             if is_closed(poll, now):  # 마감된 투표의 장소가 바뀌면 팀을 다시 짠다 (같은 인원·같은 규칙이면 팀은 그대로)
                 start_squad(poll, "auto")
                 return (f"{poll['no']}번 투표 장소를 {poll['place']}(으)로 바꿨어요.\n"
-                        "⚽ 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n"
-                        f"👉 {SQUAD_URL}"), []
+                        "⚽ 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."), []
         elif sub == "날짜":
             if not sub_args or not parse_date(sub_args[0]):
                 get_poll(room)
@@ -1735,8 +1732,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             if is_closed(poll, now):  # 마감된 투표의 참석자가 바뀌면 팀을 자동으로 다시 짠다
                 start_squad(poll, "auto")
                 return (f"{text}\n"
-                        "⚽ 팀을 자동으로 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n"
-                        f"👉 {SQUAD_URL}"), []
+                        "⚽ 팀을 자동으로 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."), []
             return poll_reply(poll, now, text)
         else:
             return "수정할 항목은 장소 / 날짜 / 멤버 중 하나예요.", []
@@ -1769,8 +1765,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             start_squad(poll, "auto", reset_members=True)
             return text + "\n\n📭 참석자가 없어서 스쿼드 명단을 비웠어요.", []
         start_squad(poll, "auto", reset_members=True)  # 수동 마감: 명단 덮어쓰기(초기화 후 참석자로 팀 짜기)
-        text += f"\n\n⚽ 팀을 자동으로 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.\n👉 {SQUAD_URL}"
-        return text, []
+        return text + f"\n\n⚽ 팀을 자동으로 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다.", []
 
     if cmd == "투표조회":
         if not args:  # 투표조회 → 전체 방의 투표 목록 (방과 상관없이)
@@ -2077,8 +2072,19 @@ async def send_weekly_notice(token: str, poll: dict) -> None:
     """정기 투표가 열렸다는 안내와 참석/불참 버튼을 보낸다."""
     mm, dd = poll["date"][2:4], poll["date"][4:6]
     text = (f"🗳 다음 주 토요일({mm}/{dd}) 정기풋살 투표가 열렸어요.\n"
-            f"장소 {poll['place']} · 마감 {fmt_deadline(poll['deadline'])}")
+            f"마감 {fmt_deadline(poll['deadline'])}")
     await send_room_message(token, WEEKLY_POLL["room"], text, {}, vote_buttons(poll))
+
+
+async def send_auto_close_notice(token: str, room: str, poll: dict) -> None:
+    """자동 마감 때 방에 마감 안내와 스쿼드 링크를 보낸다 (수동 투표종료와 같은 내용)."""
+    att = list(poll["attend"].values())
+    text = f"🔒 '{poll['title']}' 투표를 마감했습니다.\n참석 {len(att)}명: {', '.join(att) if att else '-'}"
+    if not att:
+        text += "\n\n📭 참석자가 없어서 스쿼드 명단을 비웠어요."
+    else:
+        text += f"\n\n⚽ 팀을 자동으로 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."
+    await send_room_message(token, room, text, {}, [])
 
 
 async def send_weekly_skipped(token: str) -> None:
@@ -2183,7 +2189,9 @@ async def weekly_poll_loop(token: str, stop: asyncio.Event) -> None:
         except Exception as e:
             print("정기 투표 오류:", repr(e))
         try:
-            close_due_polls(now_kst())  # 마감 시각이 지나면 자동 마감 + 팀 구성
+            for room, p in close_due_polls(now_kst()):  # 마감 시각이 지나면 자동 마감 + 팀 구성
+                if REMINDER_ON and room == WEEKLY_POLL["room"]:
+                    await send_auto_close_notice(token, room, p)
         except Exception as e:
             print("자동 마감 오류:", repr(e))
         try:
