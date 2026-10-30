@@ -1279,10 +1279,10 @@ def parse_command(text: str) -> tuple[str, list[str]] | None:
         return None
     start = 0
     if words[0].startswith("@"):  # 멘션: 봇 이름에 띄어쓰기가 있어도 3단어까지 건너뜀
-        start = next((i for i in range(1, min(len(words), 4)) if words[i].lstrip("!") in COMMANDS), None)
+        start = next((i for i in range(1, min(len(words), 4)) if words[i].lstrip("!/") in COMMANDS), None)
         if start is None:
             return None
-    cmd, args = words[start].lstrip("!"), words[start + 1:]
+    cmd, args = words[start].lstrip("!/"), words[start + 1:]  # "/참석" 처럼 슬래시 메뉴로 보낸 명령도 인식
     if cmd not in COMMANDS:
         return None
     if cmd == "투표" and args[:1] in (["종료"], ["완료"], ["조회"]):  # "투표 종료/완료/조회" 도 허용
