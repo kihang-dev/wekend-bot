@@ -207,6 +207,8 @@ def ensure_year_ledger(year):
             if r > 2:
                 ranges.append(gspread.utils.rowcol_to_a1(2, c1) + ":" + gspread.utils.rowcol_to_a1(r - 1, c2))
         new.batch_clear(ranges)
+        for kind, (label_col, _c1, _c2) in LEDGER_BLOCKS.items():
+            _rewrite_total(new, kind, _ledger_total_row(new, label_col))
         new.update(values=[[balance]], range_name="D33", value_input_option="USER_ENTERED")
     return True
 
@@ -232,6 +234,7 @@ def ledger_add(kind, values):
             "shiftDimension": "ROWS"}}]})
         a1 = gspread.utils.rowcol_to_a1(r, c1) + ":" + gspread.utils.rowcol_to_a1(r, c2)
         ws.update(values=[values], range_name=a1, value_input_option="USER_ENTERED")
+        _rewrite_total(ws, kind, r + 1)  # 계는 한 줄 아래로 내려갔으니 합계 범위를 다시 쓴다
     return r
 
 
@@ -337,3 +340,24 @@ def ledger_pay_all(month):
     if not paid:
         return f"{month}월 회비는 이미 모두 입력되어 있어요."
     return f"✅ {month}월 회비 완납 처리 {len(paid)}명 ({DUES_AMOUNT:,}원씩): {', '.join(paid)}"
+
+
+LEDGER_AMOUNT_COL = {"이자": 20, "지각": 24, "노쇼": 28, "지출": 32}  # T, X, AB, AF
+
+
+def _rewrite_total(ws, kind, total_row):
+    """계 행 합계를 맨 윗줄부터 계 바로 위 줄까지로 다시 쓴다. 계 자신을 포함하면 순환 참조가 된다."""
+    col = LEDGER_AMOUNT_COL[kind]
+    letter = "".join(ch for ch in gspread.utils.rowcol_to_a1(1, col) if ch.isalpha())
+    end = total_row - 1
+    formula = f"=SUM({letter}2:{letter}{end})" if end >= 2 else "=0"
+    ws.update(values=[[formula]], range_name=gspread.utils.rowcol_to_a1(total_row, col),
+              value_input_option="USER_ENTERED")
+
+
+def fix_ledger_totals():
+    """현재 결산 탭 네 블록의 계 합계 수식을 바로잡는다 (여러 번 실행해도 안전)."""
+    with _ledger_lock:
+        ws = _ledger_ws()
+        for kind, (label_col, _c1, _c2) in LEDGER_BLOCKS.items():
+            _rewrite_total(ws, kind, _ledger_total_row(ws, label_col))

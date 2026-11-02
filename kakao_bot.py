@@ -819,6 +819,10 @@ def ledger_image_text(cmd: str) -> str:
 def roll_ledger_year() -> None:
     """1월 1일 오전 9시(KST) 이후, 새 해 결산 탭이 없으면 만든다 (이월금은 전년도 잔액)."""
     import sheet_sync as ss
+    try:
+        ss.fix_ledger_totals()
+    except Exception as e:
+        print("계 수식 정리 실패:", repr(e))
     now = now_kst()
     if now < now.replace(month=1, day=1, hour=9, minute=0, second=0, microsecond=0):
         return
