@@ -101,6 +101,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 
 [결산·지출 관리 (관리자)]
 · 회비 이름 [월] — 회비 5,000원 납부 처리 (월 생략 시 이번 달)
+· 회비 완납 [월] — 회비 대상 전원 납부 처리 (이미 입력된 칸은 그대로)
 · 지각 이름 금액 — 지각비 추가 (오늘 날짜)
 · 노쇼 이름 금액 — 노쇼비 추가 (오늘 날짜)
 · 이자 금액 — 정기이자 추가 (오늘 날짜)
@@ -764,6 +765,11 @@ def ledger_command(cmd: str, args: list[str], now: datetime) -> str:
         return int(t)
 
     if cmd == "회비":
+        if args and args[0] == "완납":
+            month = int(args[1]) if len(args) > 1 and args[1].isdigit() else now.month
+            if not 1 <= month <= 12:
+                raise ValueError("월은 1~12 사이로 입력해 주세요.")
+            return ss.ledger_pay_all(month)
         if not args:
             raise ValueError("사용법: 회비 이름 [월]  (예: 회비 김기항 11, 월 생략 시 이번 달)")
         month = int(args[1]) if len(args) > 1 and args[1].isdigit() else now.month

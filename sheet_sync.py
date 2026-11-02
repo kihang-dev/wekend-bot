@@ -313,3 +313,27 @@ def export_range_png(sheet_id, gid, rng, out_png):
             p.unlink(missing_ok=True)
     pdf.unlink(missing_ok=True)
     return out_png
+
+
+def ledger_pay_all(month):
+    """회비 대상(O) 전원 중 해당 월 칸이 비어 있는 사람만 회비를 넣는다. 이미 입력된 칸은 건드리지 않는다."""
+    with _ledger_lock:
+        ws = _ledger_ws()
+        names = ws.col_values(LEDGER_NAME_COL)
+        last = max(i for i, v in enumerate(names, start=1) if i > 1 and v.strip())
+        status = ws.col_values(LEDGER_DUES_COL)
+        col = LEDGER_MONTH_OFFSET + month
+        cells = ws.col_values(col)
+        updates, paid = [], []
+        for r in range(2, last + 1):
+            name = names[r - 1].strip() if r - 1 < len(names) else ""
+            st = status[r - 1].strip() if r - 1 < len(status) else ""
+            cur = cells[r - 1].strip() if r - 1 < len(cells) else ""
+            if name and st == "O" and not cur:
+                updates.append({"range": gspread.utils.rowcol_to_a1(r, col), "values": [[DUES_AMOUNT]]})
+                paid.append(name)
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+    if not paid:
+        return f"{month}월 회비는 이미 모두 입력되어 있어요."
+    return f"✅ {month}월 회비 완납 처리 {len(paid)}명 ({DUES_AMOUNT:,}원씩): {', '.join(paid)}"
