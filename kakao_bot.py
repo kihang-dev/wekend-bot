@@ -2,7 +2,7 @@
 # uv run 시 아래 의존성을 자동 설치합니다 (pip install 불필요)
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["httpx>=0.27", "websockets>=15.0", "fastapi>=0.110", "uvicorn>=0.29", "gspread>=6,<7", "google-auth"]
+# dependencies = ["httpx>=0.27", "websockets>=15.0", "fastapi>=0.110", "uvicorn>=0.29", "gspread>=6,<7", "google-auth", "pillow>=10"]
 # ///
 """
 카톡 명령어 (앞의 ! 는 생략 가능, 단체방 멘션도 인식)
@@ -785,6 +785,22 @@ def ledger_command(cmd: str, args: list[str], now: datetime) -> str:
     raise ValueError("알 수 없는 결산 명령이에요.")
 
 
+LEDGER_IMAGE_CMDS = {"회비시트": "회비", "지각시트": "지각", "노쇼시트": "노쇼", "이자시트": "이자", "지출시트": "지출"}
+
+
+def ledger_image_text(cmd: str) -> str:
+    """결산 시트 한 블록을 이미지로 만들어 스쿼드 웹 폴더에 올리고, 이미지 답장을 준비한다."""
+    import time
+    import sheet_sync as ss
+    kind = LEDGER_IMAGE_CMDS[cmd]
+    rng = ss.ledger_view_range(kind)
+    png = SQUAD_PUBLISH_DIR / f"ledger_{kind}.png"
+    ss.export_range_png(ss.LEDGER_SHEET_ID, ss.LEDGER_GID, rng, png)
+    globals()["PENDING_IMAGE"] = {"url": f"{SQUAD_URL.rstrip('/')}/ledger_{kind}.png?v={int(time.time())}",
+                                  "alt": f"{kind} 시트 ({rng})"}
+    return ""
+
+
 def set_seonchul(name: str, on: bool) -> str:
     """grades.py 의 SEONCHUL_PLAYERS 목록에 선출을 넣거나 뺀다. 바꾼 뒤 GitHub 에 커밋·푸시한다."""
     import subprocess
@@ -1458,7 +1474,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기", "명단삭제", "등급시트", "회비", "지각", "노쇼", "이자", "지출"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기", "명단삭제", "등급시트", "회비", "지각", "노쇼", "이자", "지출", "회비시트", "지각시트", "노쇼시트", "이자시트", "지출시트"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1842,6 +1858,11 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return str(e), []
         except Exception as e:
             return f"결산 시트 처리 실패: {e}", []
+    if cmd in ("회비시트", "지각시트", "노쇼시트", "이자시트", "지출시트"):  # 결산 시트 블록 이미지 (관리자 전용)
+        try:
+            return ledger_image_text(cmd), []
+        except Exception as e:
+            return f"{cmd} 캡처 실패: {e}", []
     if cmd == "등급시트":  # 등급시트 → 등급 시트 A1:J25 캡처 링크
         try:
             return grade_sheet_text(), []

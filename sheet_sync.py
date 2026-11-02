@@ -1,3 +1,4 @@
+from pathlib import Path
 import threading
 from pathlib import Path
 
@@ -212,3 +213,63 @@ def ledger_pay_dues(name, month):
         ws.update(values=[[DUES_AMOUNT]], range_name=gspread.utils.rowcol_to_a1(row, col),
                   value_input_option="USER_ENTERED")
     return f"✅ {name} {month}월 회비 {DUES_AMOUNT:,}원 납부 처리 (결산 시트 반영)"
+
+
+def _ledger_total_row(ws, label_col):
+    col = ws.col_values(label_col)
+    r = next((i for i, v in enumerate(col, start=1) if i > 1 and v.strip() == "계"), None)
+    if r is None:
+        raise ValueError("'계' 행을 찾지 못했어요.")
+    return r
+
+
+def ledger_view_range(kind):
+    """캡처 범위: 회비는 명단 전체, 나머지는 블록 첫 행부터 '계' 행까지."""
+    if kind == "회비":
+        names = _ledger_ws().col_values(LEDGER_NAME_COL)
+        last = max(i for i, v in enumerate(names, start=1) if i > 1 and v.strip())
+        return f"A1:P{last + 1}"
+    label_col, c1, c2 = LEDGER_BLOCKS[kind]
+    r = _ledger_total_row(_ledger_ws(), label_col)
+    return gspread.utils.rowcol_to_a1(1, c1) + ":" + gspread.utils.rowcol_to_a1(r, c2)
+
+
+def export_range_png(sheet_id, gid, rng, out_png):
+    """스프레드시트의 특정 탭·범위를 PDF 로 내보낸 뒤 PNG 한 장으로 만든다."""
+    import subprocess
+    import requests
+    from google.oauth2.service_account import Credentials
+    from google.auth.transport.requests import Request
+
+    creds = Credentials.from_service_account_file(
+        str(KEY_PATH),
+        scopes=["https://www.googleapis.com/auth/spreadsheets.readonly",
+                "https://www.googleapis.com/auth/drive.readonly"])
+    creds.refresh(Request())
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export"
+    params = {"format": "pdf", "gid": gid, "range": rng,
+              "portrait": "false", "fitw": "true", "size": "A4"}
+    r = requests.get(url, params=params, headers={"Authorization": f"Bearer {creds.token}"}, timeout=60)
+    r.raise_for_status()
+    pdf = out_png.with_suffix(".pdf")
+    pdf.write_bytes(r.content)
+    prefix = str(out_png.with_suffix(""))
+    subprocess.run(["pdftoppm", "-png", "-r", "150", str(pdf), prefix], check=True, timeout=60)
+    pages = sorted(Path(prefix).parent.glob(Path(prefix).name + "-*.png"))
+    if not pages:
+        raise RuntimeError("PDF 변환 결과가 없어요.")
+    if len(pages) == 1:
+        pages[0].replace(out_png)
+    else:
+        from PIL import Image
+        imgs = [Image.open(p).convert("RGB") for p in pages]
+        canvas = Image.new("RGB", (max(i.width for i in imgs), sum(i.height for i in imgs)), "white")
+        y = 0
+        for im in imgs:
+            canvas.paste(im, (0, y))
+            y += im.height
+        canvas.save(out_png)
+        for p in pages:
+            p.unlink(missing_ok=True)
+    pdf.unlink(missing_ok=True)
+    return out_png
