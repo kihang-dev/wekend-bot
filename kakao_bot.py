@@ -117,6 +117,17 @@ def dormant_names() -> set:
     return set(_load(DORMANT_FILE).get("names", []))
 
 
+# 이미 휴면인 인원의 시작 년월 (파일에 기록이 없을 때 쓰는 기본값)
+DORMANT_SINCE_SEED = {"안희수": "26.04", "김의빈": "26.07", "김동규": "26.08", "김동욱": "26.09"}
+
+
+def dormant_since() -> dict:
+    """{이름: 'YY.MM'} 휴면 시작 년월."""
+    since = dict(DORMANT_SINCE_SEED)
+    since.update(_load(DORMANT_FILE).get("since") or {})
+    return since
+
+
 def roster_names() -> list[str]:
     """weekenders-futsal 명단 (grades.json 에 등록된 선수 전체). 못 읽으면 빈 목록."""
     try:
@@ -1446,19 +1457,29 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
     if cmd == "도움말":
         return HELP_TEXT, []
 
-    if cmd == "휴면":  # 휴면 김기항 김민규 → 미응답 명단에서 뺀다 / 휴면 김기항 해제 → 되돌림 / 휴면 → 목록
+    if cmd == "휴면":  # 휴면 김기항 김민규 → 미응답 명단에서 뺀다 / 휴면 김기항 해제 → 되돌림 / 휴면 → 목록(시작 년월)
         names = set(dormant_names())
+        since = dormant_since()
         if not args:
-            return ("휴면 인원: " + ", ".join(sorted(names))) if names else "휴면 인원이 없어요.", []
+            if not names:
+                return "휴면 인원이 없어요.", []
+            order = sorted(names, key=lambda n: (since.get(n) or "~", n))  # 시작 년월순
+            lines = [f"{n} '{since[n]}" if since.get(n) else n for n in order]
+            return "휴면 인원 :\n" + "\n".join(lines), []
         if args[0] == "해제" or args[-1] == "해제":  # 휴면 해제 김기항 / 휴면 김기항 해제 둘 다 가능
             targets = [a for a in (args[1:] if args[0] == "해제" else args[:-1]) if a and a != "해제"]
             if not targets:
                 return "사용법: 휴면 해제 김기항  (또는 휴면 김기항 해제)", []
             names -= set(targets)
-            _save(DORMANT_FILE, {"names": sorted(names)})
+            _save(DORMANT_FILE, {"names": sorted(names),
+                                 "since": {k: v for k, v in since.items() if k in names}})
             return f"휴면 해제: {', '.join(targets)}", []
+        stamp = (now or now_kst()).strftime("%y.%m")  # 이미 기록된 시작 년월은 바꾸지 않는다
+        for a in args:
+            since.setdefault(a, stamp)
         names |= set(args)
-        _save(DORMANT_FILE, {"names": sorted(names)})
+        _save(DORMANT_FILE, {"names": sorted(names),
+                             "since": {k: v for k, v in since.items() if k in names}})
         return f"휴면 등록: {', '.join(args)} (미응답 명단에서 빠져요)", []
 
     if cmd == "미응답":  # 미응답 → 진행중인 투표(방 무관) 에서 아직 참석·불참을 누르지 않은 사람 (이름 나열)
@@ -2179,6 +2200,27 @@ async def send_auto_close_notice(token: str, room: str, poll: dict) -> None:
     await send_room_message(token, room, text, {}, [])
 
 
+DUES_AMOUNT = "5,000원"
+DUES_ACCOUNT = "카카오뱅크 7942-23-58646"
+
+
+async def maybe_send_dues(token: str, now: datetime) -> None:
+    """매월 1일 9시 이후 처음 한 번, 정기 투표 방에 회비 입금 안내를 보낸다 (멘션 없음)."""
+    if now.day != 1 or now.hour < 9:
+        return
+    key = now.strftime("%Y-%m")
+    marks = _load(SCHEDULE_FILE)
+    if marks.get("dues") == key:  # 이번 달에 이미 보냄
+        return
+    marks["dues"] = key  # 먼저 표시해서 중복 발송을 막는다
+    _save(SCHEDULE_FILE, marks)
+    text = (f"💰 {now.month}월 회비 안내\n"
+            f"회비: {DUES_AMOUNT}\n"
+            f"입금 계좌: {DUES_ACCOUNT}\n"
+            f"입금 후 확인 부탁드립니다. 감사합니다!")
+    await send_room_message(token, WEEKLY_POLL["room"], text, {}, [])
+
+
 async def send_weekly_skipped(token: str) -> None:
     await send_room_message(token, WEEKLY_POLL["room"],
                             "이번 주 정기 투표는 진행중인 투표가 있어서 건너뛰었어요.", {}, [])
@@ -2280,6 +2322,11 @@ async def weekly_poll_loop(token: str, stop: asyncio.Event) -> None:
                 await send_weekly_skipped(token)
         except Exception as e:
             print("정기 투표 오류:", repr(e))
+        try:
+            if REMINDER_ON:
+                await maybe_send_dues(token, now_kst())
+        except Exception as e:
+            print("회비 안내 오류:", repr(e))
         try:
             for room, p in close_due_polls(now_kst()):  # 마감 시각이 지나면 자동 마감 + 팀 구성
                 if REMINDER_ON and room == WEEKLY_POLL["room"]:
