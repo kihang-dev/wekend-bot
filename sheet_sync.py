@@ -166,9 +166,49 @@ LEDGER_MONTH_OFFSET = 3  # D = 1월 → 열 번호 = 3 + 월
 _ledger_lock = threading.Lock()
 
 
-def _ledger_ws():
+def _ledger_spreadsheet():
     gc = gspread.service_account(filename=str(KEY_PATH))
-    return gc.open_by_key(LEDGER_SHEET_ID).get_worksheet_by_id(LEDGER_GID)
+    return gc.open_by_key(LEDGER_SHEET_ID)
+
+
+def _ledger_ws():
+    """올해(KST) 결산 탭을 쓴다. 아직 없으면 2026 탭(LEDGER_GID)을 쓴다."""
+    from datetime import datetime, timedelta, timezone
+    sh = _ledger_spreadsheet()
+    year = datetime.now(timezone(timedelta(hours=9))).year
+    try:
+        return sh.worksheet(f"{year}년 결산")
+    except gspread.WorksheetNotFound:
+        return sh.get_worksheet_by_id(LEDGER_GID)
+
+
+def ledger_gid():
+    return _ledger_ws().id
+
+
+def ensure_year_ledger(year):
+    """year 결산 탭이 없으면 전년도 탭을 복제해 만든다.
+    이월금(D33)은 전년도 잔액(J33)을 숫자로 넣고, 월별 회비와 기록 블록은 비운다. 이름·회비대상여부는 유지."""
+    with _ledger_lock:
+        sh = _ledger_spreadsheet()
+        title = f"{year}년 결산"
+        if any(w.title == title for w in sh.worksheets()):
+            return False
+        prev = sh.worksheet(f"{year - 1}년 결산")
+        balance = prev.acell("J33", value_render_option="UNFORMATTED_VALUE").value
+        if not isinstance(balance, (int, float)):
+            raise ValueError(f"{year - 1}년 결산 J33(잔액)을 숫자로 읽지 못했어요: {balance!r}")
+        new = prev.duplicate(new_sheet_name=title)
+        names = new.col_values(LEDGER_NAME_COL)
+        last = max(i for i, v in enumerate(names, start=1) if i > 1 and v.strip())
+        ranges = [f"D2:O{last}"]
+        for label_col, c1, c2 in LEDGER_BLOCKS.values():
+            r = _ledger_total_row(new, label_col)
+            if r > 2:
+                ranges.append(gspread.utils.rowcol_to_a1(2, c1) + ":" + gspread.utils.rowcol_to_a1(r - 1, c2))
+        new.batch_clear(ranges)
+        new.update(values=[[balance]], range_name="D33", value_input_option="USER_ENTERED")
+    return True
 
 
 def ledger_members():

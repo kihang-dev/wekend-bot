@@ -795,10 +795,33 @@ def ledger_image_text(cmd: str) -> str:
     kind = LEDGER_IMAGE_CMDS[cmd]
     rng = ss.ledger_view_range(kind)
     png = SQUAD_PUBLISH_DIR / f"ledger_{kind}.png"
-    ss.export_range_png(ss.LEDGER_SHEET_ID, ss.LEDGER_GID, rng, png)
+    ss.export_range_png(ss.LEDGER_SHEET_ID, ss.ledger_gid(), rng, png)
     globals()["PENDING_IMAGE"] = {"url": f"{SQUAD_URL.rstrip('/')}/ledger_{kind}.png?v={int(time.time())}",
                                   "alt": f"{kind} 시트 ({rng})"}
     return ""
+
+
+def roll_ledger_year() -> None:
+    """1월 1일 오전 9시(KST) 이후, 새 해 결산 탭이 없으면 만든다 (이월금은 전년도 잔액)."""
+    import sheet_sync as ss
+    now = now_kst()
+    if now < now.replace(month=1, day=1, hour=9, minute=0, second=0, microsecond=0):
+        return
+    if ss.ensure_year_ledger(now.year):
+        print(f"{now.year}년 결산 탭 생성 (이월금 반영)")
+
+
+async def ledger_year_loop(stop: asyncio.Event) -> None:
+    """30분마다 새 해 결산 탭이 필요한지 확인한다. 봇이 꺼져 있었어도 켜지면 바로 만든다."""
+    while not stop.is_set():
+        try:
+            await asyncio.to_thread(roll_ledger_year)
+        except Exception as e:
+            print("결산 연도 전환 오류:", repr(e))
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=1800)
+        except asyncio.TimeoutError:
+            pass
 
 
 def set_seonchul(name: str, on: bool) -> str:
@@ -2533,6 +2556,7 @@ async def main() -> int:
     api_task = asyncio.create_task(serve_api(stop))
     weekly_task = asyncio.create_task(weekly_poll_loop(token, stop))
     grade_task = asyncio.create_task(grade_sync_loop(stop))
+    year_task = asyncio.create_task(ledger_year_loop(stop))
     reminder_task = asyncio.create_task(remind_unanswered_loop(token, stop))
 
     retry = 1
