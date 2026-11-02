@@ -107,6 +107,8 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 노쇼 이름 금액 날짜 — 노쇼비 추가 (예: 노쇼 김동호 50000 11/2)
 · 이자 금액 날짜 — 정기이자 추가 (예: 이자 100 11/2)
 · 지출 항목 금액 날짜 [비고] — 지출 추가 (예: 지출 생수 3900 11/2, 항목은 띄어쓰기 없이)
+· 지각삭제 날짜 이름 금액 / 노쇼삭제 날짜 이름 금액 — 기록 삭제 (세 값이 모두 맞아야 삭제)
+· 이자삭제 날짜 금액 / 지출삭제 날짜 항목 금액 — 기록 삭제 (같은 기록이 여러 개면 삭제 안 함)
 · 회비시트 / 지각시트 / 노쇼시트 / 이자시트 / 지출시트 — 결산 시트 이미지 보기
 
 [명단·선수]
@@ -827,6 +829,23 @@ def ledger_command(cmd: str, args: list[str], now: datetime) -> str:
         note = " ".join(args[2:])
         ss.ledger_add("지출", [today, item, amt, note])
         return f"✅ 지출 {item} {amt:,}원 추가 (오늘 {today}, 결산 시트 반영)"
+    if cmd in ("지각삭제", "노쇼삭제", "이자삭제", "지출삭제"):
+        kind = cmd[:-2]
+        date_str, rest = _pop_date(args, now)
+        if kind == "이자":
+            if len(rest) != 1:
+                raise ValueError("사용법: 이자삭제 날짜 금액  (예: 이자삭제 11/2 100)")
+            key, amt = None, amount_of(rest[0])
+        elif kind == "지출":
+            if len(rest) != 2:
+                raise ValueError("사용법: 지출삭제 날짜 항목 금액  (예: 지출삭제 11/2 생수 3900)")
+            key, amt = rest[0], amount_of(rest[1])
+        else:
+            if len(rest) != 2:
+                raise ValueError(f"사용법: {cmd} 날짜 이름 금액  (예: {cmd} 11/2 김기항 5000)")
+            key, amt = rest[0], amount_of(rest[1])
+        row = ss.ledger_delete(kind, date_str, key, amt)
+        return f"🗑️ {kind} 기록 삭제 완료 ({date_str}, 삭제 전 시트 {row}행)"
     raise ValueError("알 수 없는 결산 명령이에요.")
 
 
@@ -1546,7 +1565,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기", "명단삭제", "등급시트", "회비", "지각", "노쇼", "이자", "지출", "회비시트", "지각시트", "노쇼시트", "이자시트", "지출시트"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기", "명단삭제", "등급시트", "회비", "지각", "노쇼", "이자", "지출", "회비시트", "지각시트", "노쇼시트", "이자시트", "지출시트", "지각삭제", "노쇼삭제", "이자삭제", "지출삭제"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1923,7 +1942,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return GRADE_USAGE, []
         return set_player_grades(name, mode, changes), []
 
-    if cmd in ("회비", "지각", "노쇼", "이자", "지출"):  # 2026년 결산 시트 (관리자 전용)
+    if cmd in ("회비", "지각", "노쇼", "이자", "지출", "지각삭제", "노쇼삭제", "이자삭제", "지출삭제"):  # 2026년 결산 시트 (관리자 전용)
         try:
             return ledger_command(cmd, args, now or now_kst()), []
         except ValueError as e:

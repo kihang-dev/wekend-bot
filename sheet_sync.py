@@ -384,3 +384,42 @@ def ledger_unpaid(month):
         if name and st == "O" and not cur:
             unpaid.append(name)
     return unpaid
+
+
+def ledger_delete(kind, date_str, key, amount):
+    """날짜·이름(이자는 생략)·금액이 모두 맞는 기록 한 줄을 지우고 블록을 위로 당긴다.
+    같은 조건이 여러 개면 지우지 않고 오류로 행 번호를 알려 준다."""
+    from datetime import date as _date
+    label_col, c1, c2 = LEDGER_BLOCKS[kind]
+    target = (_date.fromisoformat(date_str) - _date(1899, 12, 30)).days  # 시트 날짜 일련번호
+    with _ledger_lock:
+        ws = _ledger_ws()
+        r = _ledger_total_row(ws, label_col)
+        if r <= 2:
+            raise ValueError(f"{kind} 기록이 없어요.")
+        rng = gspread.utils.rowcol_to_a1(2, c1) + ":" + gspread.utils.rowcol_to_a1(r - 1, c2)
+        block = ws.get(rng, value_render_option="UNFORMATTED_VALUE")
+        width = c2 - c1 + 1
+        matches = []
+        for i, row in enumerate(block):
+            row = list(row) + [""] * (width - len(row))
+            d, name, amt = row[0], str(row[1]).strip(), row[2]
+            if not isinstance(d, (int, float)) or int(d) != target:
+                continue
+            if key is not None and name != key:
+                continue
+            if not isinstance(amt, (int, float)) or int(amt) != amount:
+                continue
+            matches.append(i + 2)
+        if not matches:
+            raise ValueError("해당 기록을 찾지 못했어요. 날짜·이름·금액을 확인해 주세요.")
+        if len(matches) > 1:
+            rows = ", ".join(str(x) for x in matches)
+            raise ValueError(f"같은 기록이 {len(matches)}개예요 (시트 {rows}행). 구글 시트에서 직접 지워 주세요.")
+        row = matches[0]
+        ws.spreadsheet.batch_update({"requests": [{"deleteRange": {
+            "range": {"sheetId": ws.id, "startRowIndex": row - 1, "endRowIndex": row,
+                      "startColumnIndex": c1 - 1, "endColumnIndex": c2},
+            "shiftDimension": "ROWS"}}]})
+        _rewrite_total(ws, kind, r - 1)  # 계가 한 줄 위로 올라왔으니 합계를 다시 쓴다
+    return row
