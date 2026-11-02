@@ -366,3 +366,21 @@ def fix_ledger_totals():
         ws = _ledger_ws()
         for kind, (label_col, _c1, _c2) in LEDGER_BLOCKS.items():
             _rewrite_total(ws, kind, _ledger_total_row(ws, label_col))
+
+
+def ledger_unpaid(month):
+    """회비 대상(O)이면서 해당 월 칸이 비어 있는 선수 이름 목록."""
+    with _ledger_lock:
+        ws = _ledger_ws()
+        names = ws.col_values(LEDGER_NAME_COL)
+        last = max(i for i, v in enumerate(names, start=1) if i > 1 and v.strip())
+        status = ws.col_values(LEDGER_DUES_COL)
+        cells = ws.col_values(LEDGER_MONTH_OFFSET + month)
+    unpaid = []
+    for r in range(2, last + 1):
+        name = names[r - 1].strip() if r - 1 < len(names) else ""
+        st = status[r - 1].strip() if r - 1 < len(status) else ""
+        cur = cells[r - 1].strip() if r - 1 < len(cells) else ""
+        if name and st == "O" and not cur:
+            unpaid.append(name)
+    return unpaid
