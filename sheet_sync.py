@@ -117,3 +117,32 @@ def read_grade_sheet():
         vals = (row + [""] * 7)[1:7]
         out[row[0].strip()] = {k: v.strip().upper() for k, v in zip(ABILITY_COLS, vals)}
     return out
+
+
+GRADE_GID = 1988904302  # 등급 시트의 '회원정보의 사본' 탭 gid
+GRADE_RANGE = "A1:J25"
+
+
+def export_grade_sheet_png(out_png):
+    """등급 시트 GRADE_RANGE 를 PDF 로 내보낸 뒤 PNG 한 장으로 바꾼다 (서비스 계정 권한 사용)."""
+    import subprocess
+    import requests
+    from google.oauth2.service_account import Credentials
+    from google.auth.transport.requests import Request
+
+    creds = Credentials.from_service_account_file(
+        str(KEY_PATH),
+        scopes=["https://www.googleapis.com/auth/spreadsheets.readonly",
+                "https://www.googleapis.com/auth/drive.readonly"])
+    creds.refresh(Request())
+    url = f"https://docs.google.com/spreadsheets/d/{GRADE_SHEET_ID}/export"
+    params = {"format": "pdf", "gid": GRADE_GID, "range": GRADE_RANGE,
+              "portrait": "false", "fitw": "true", "size": "A4"}
+    r = requests.get(url, params=params, headers={"Authorization": f"Bearer {creds.token}"}, timeout=60)
+    r.raise_for_status()
+    pdf = out_png.with_suffix(".pdf")
+    pdf.write_bytes(r.content)
+    subprocess.run(["pdftoppm", "-png", "-r", "150", "-singlefile", str(pdf), str(out_png.with_suffix(""))],
+                   check=True, timeout=60)
+    pdf.unlink(missing_ok=True)
+    return out_png

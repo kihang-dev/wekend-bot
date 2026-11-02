@@ -23,7 +23,7 @@ REST API (.env 에 API_KEY 를 넣으면 켜짐, 문서: http://서버:8000/docs
 import asyncio
 import copy
 import json
-from sheet_sync import sheet_clear_grade_row_async, sync_abilities_async, read_grade_sheet
+from sheet_sync import sheet_clear_grade_row_async, sync_abilities_async, read_grade_sheet, export_grade_sheet_png
 import os
 import secrets
 import shlex
@@ -731,6 +731,13 @@ def delete_roster_player(name: str) -> str:
     return f"🗑️ {name} 명단에서 삭제했어요 (GitHub 반영, 등급 시트 행도 비움)"
 
 
+def grade_sheet_text() -> str:
+    """등급 시트 A1:J25 를 이미지로 만들어 스쿼드 웹 폴더에 올리고 링크를 돌려준다."""
+    png = SQUAD_PUBLISH_DIR / "grade_sheet.png"
+    export_grade_sheet_png(png)
+    return "📊 등급 시트 (A1:J25)\n" + f"{SQUAD_URL.rstrip('/')}/grade_sheet.png"
+
+
 def set_seonchul(name: str, on: bool) -> str:
     """grades.py 의 SEONCHUL_PLAYERS 목록에 선출을 넣거나 뺀다. 바꾼 뒤 GitHub 에 커밋·푸시한다."""
     import subprocess
@@ -1404,7 +1411,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기", "명단삭제"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기", "명단삭제", "등급시트"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1781,6 +1788,11 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return GRADE_USAGE, []
         return set_player_grades(name, mode, changes), []
 
+    if cmd == "등급시트":  # 등급시트 → 등급 시트 A1:J25 캡처 링크
+        try:
+            return grade_sheet_text(), []
+        except Exception as e:
+            return f"등급 시트 캡처 실패: {e}", []
     if cmd == "명단삭제":  # 명단삭제 김민규 → 명단·포지션에서 삭제 (GitHub 반영)
         name = " ".join(args).strip()
         if not name:
