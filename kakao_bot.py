@@ -102,10 +102,10 @@ HELP_TEXT = """📖 위켄봇 사용법
 [결산·지출 관리 (관리자)]
 · 회비 이름 [월] — 회비 5,000원 납부 처리 (월 생략 시 이번 달)
 · 회비 완납 [월] — 회비 대상 전원 납부 처리 (이미 입력된 칸은 그대로)
-· 지각 이름 금액 — 지각비 추가 (오늘 날짜)
-· 노쇼 이름 금액 — 노쇼비 추가 (오늘 날짜)
-· 이자 금액 — 정기이자 추가 (오늘 날짜)
-· 지출 항목 금액 [비고] — 지출 추가 (오늘 날짜, 항목은 띄어쓰기 없이)
+· 지각 이름 금액 [날짜] — 지각비 추가 (날짜 생략 시 오늘, 예: 지각 김기항 5000 11/2)
+· 노쇼 이름 금액 [날짜] — 노쇼비 추가 (날짜 생략 시 오늘)
+· 이자 금액 [날짜] — 정기이자 추가 (날짜 생략 시 오늘)
+· 지출 항목 금액 [날짜] [비고] — 지출 추가 (날짜 생략 시 오늘, 항목은 띄어쓰기 없이)
 · 회비시트 / 지각시트 / 노쇼시트 / 이자시트 / 지출시트 — 결산 시트 이미지 보기
 
 [명단·선수]
@@ -753,10 +753,31 @@ def grade_sheet_text() -> str:
     return ""
 
 
+def _pop_date(args: list[str], now: datetime) -> tuple[str, list[str]]:
+    """인자에서 날짜 토큰(2026-11-02, 11/2, 11.2)을 찾아 뺀다. 없으면 오늘 날짜."""
+    import re
+    from datetime import date
+    for i, tok in enumerate(args):
+        if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/.]\d{1,2}", tok):
+            if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", tok):
+                y, m, d = (int(x) for x in tok.split("-"))
+            else:
+                y = now.year
+                m, d = (int(x) for x in re.split(r"[/.]", tok))
+            try:
+                day = date(y, m, d)
+            except ValueError:
+                raise ValueError(f"날짜가 올바르지 않아요: {tok}")
+            return day.strftime("%Y-%m-%d"), args[:i] + args[i + 1:]
+    return now.strftime("%Y-%m-%d"), args
+
+
 def ledger_command(cmd: str, args: list[str], now: datetime) -> str:
     """2026년 결산 시트 명령 (관리자 전용). 잘못된 입력은 ValueError 로 안내 문구를 던진다."""
     import sheet_sync as ss
     today = now.strftime("%Y-%m-%d")
+    if cmd in ("지각", "노쇼", "이자", "지출"):  # 날짜를 입력하면 그 날짜, 없으면 오늘
+        today, args = _pop_date(args, now)
 
     def amount_of(tok: str) -> int:
         t = tok.replace(",", "")
