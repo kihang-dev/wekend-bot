@@ -104,3 +104,16 @@ def sheet_clear_grade_row_async(name):
             except Exception as e:
                 print("시트 등급 행 삭제 실패:", repr(e))
     threading.Thread(target=job, daemon=True).start()
+
+
+def read_grade_sheet():
+    """등급 시트를 {이름: {능력치: 등급}} 으로 읽는다. 이름이 빈 행은 건너뛴다."""
+    gc = gspread.service_account(filename=str(KEY_PATH))
+    ws = gc.open_by_key(GRADE_SHEET_ID).worksheet(GRADE_TAB)
+    out = {}
+    for row in ws.get("B2:H200"):
+        if not row or not row[0].strip():
+            continue
+        vals = (row + [""] * 7)[1:7]
+        out[row[0].strip()] = {k: v.strip().upper() for k, v in zip(ABILITY_COLS, vals)}
+    return out

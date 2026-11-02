@@ -23,7 +23,7 @@ REST API (.env 에 API_KEY 를 넣으면 켜짐, 문서: http://서버:8000/docs
 import asyncio
 import copy
 import json
-from sheet_sync import sheet_clear_grade_row_async
+from sheet_sync import sheet_clear_grade_row_async, sync_abilities_async, read_grade_sheet
 import os
 import secrets
 import shlex
@@ -883,6 +883,54 @@ def grade_text(name: str, abilities: dict) -> str:
     return f"⭐ {name} 등급\n" + " · ".join(parts)
 
 
+GRADE_SNAPSHOT = HERE / "grade_snapshot.json"  # 마지막으로 시트와 맞춘 능력치 (깃에 올리지 않음)
+
+
+def sync_grades_from_sheet() -> int:
+    """등급 시트에서 바뀐 능력치를 grades.json 에 반영한다. 반영한 선수 수를 돌려준다.
+    스냅샷과 비교해서 '시트에서 바뀐 값'만 골라 반영하므로 봇이 방금 바꾼 값을 되돌리지 않는다."""
+    try:
+        sheet = read_grade_sheet()
+    except Exception as e:
+        print("등급 시트 읽기 실패:", repr(e))
+        return 0
+    if not GRADE_SNAPSHOT.exists():
+        _save(GRADE_SNAPSHOT, sheet)  # 처음 실행: 현재 시트를 기준으로 삼는다
+        return 0
+    snap = _load(GRADE_SNAPSHOT)
+    pull_squad()
+    gpath = SQUAD_REPO / "grades.json"
+    bot = json.loads(gpath.read_text(encoding="utf-8")) if gpath.exists() else {}
+    applied = 0
+    for name, abil in sheet.items():
+        if name not in bot:
+            continue
+        old = snap.get(name, {})
+        changes = {k: v for k, v in abil.items()
+                   if v in GRADE_CODES and v != old.get(k) and v != bot[name].get(k)}
+        if changes:
+            try:
+                set_player_grades(name, "item", changes)
+                applied += 1
+            except Exception as e:
+                print("시트 변경 반영 실패:", name, repr(e))
+    _save(GRADE_SNAPSHOT, sheet)
+    return applied
+
+
+async def grade_sync_loop(stop: asyncio.Event) -> None:
+    """1분마다 등급 시트를 읽어 바뀐 능력치를 봇에 반영한다."""
+    while not stop.is_set():
+        try:
+            await asyncio.to_thread(sync_grades_from_sheet)
+        except Exception as e:
+            print("등급 시트 동기화 오류:", repr(e))
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=60)
+        except asyncio.TimeoutError:
+            pass
+
+
 def set_player_grades(name: str, mode: str, changes: dict | None) -> str:
     """grades.json 을 고치고 GitHub 에 커밋·푸시한다. view 는 조회만, item 은 입력 항목만, all 은 6개 전체를 바꾼다."""
     import subprocess
@@ -899,6 +947,7 @@ def set_player_grades(name: str, mode: str, changes: dict | None) -> str:
         abilities = {} if mode == "all" else dict(data.get(name, {}))
         abilities.update(changes or {})
         data[name] = {k: abilities[k] for k in ABILITY_KEYS if k in abilities}
+        sync_abilities_async(name, dict(data[name]))  # 봇 -> 시트 (실패해도 봇 동작은 계속)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
         def run(*args):
@@ -2396,6 +2445,7 @@ async def main() -> int:
         asyncio.create_task(watch_updates(start_head, stop))
     api_task = asyncio.create_task(serve_api(stop))
     weekly_task = asyncio.create_task(weekly_poll_loop(token, stop))
+    grade_task = asyncio.create_task(grade_sync_loop(stop))
     reminder_task = asyncio.create_task(remind_unanswered_loop(token, stop))
 
     retry = 1
