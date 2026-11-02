@@ -476,8 +476,6 @@ def add_member_rows(name, grades6, first, second):
         row = [new - 1, name] + [grades6[k] for k in ABILITY_COLS] \
             + [GRADE_I_FORMULA.format(r=new), GRADE_J_FORMULA.format(r=new, last=new), first, second]
         gws.update(values=[row], range_name=f"A{new}:L{new}", value_input_option="USER_ENTERED")
-        jvals = [[GRADE_J_FORMULA.format(r=r, last=new)] for r in range(2, new + 1)]
-        gws.update(values=jvals, range_name=f"J2:J{new}", value_input_option="USER_ENTERED")
         out.append(f"등급 시트: {new}행에 추가")
     with _ledger_lock:
         lws = _ledger_ws()
