@@ -103,10 +103,10 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 회비 이름 [월] — 회비 5,000원 납부 처리 (월 생략 시 이번 달)
 · 회비 완납 [월] — 회비 대상 전원 납부 처리 (이미 입력된 칸은 그대로)
 · 회비 미납 [월] — 회비 미납자 보기 (월 생략 시 이번 달)
-· 지각 이름 금액 [날짜] — 지각비 추가 (날짜 생략 시 오늘, 예: 지각 김기항 5000 11/2)
-· 노쇼 이름 금액 [날짜] — 노쇼비 추가 (날짜 생략 시 오늘)
-· 이자 금액 [날짜] — 정기이자 추가 (날짜 생략 시 오늘)
-· 지출 항목 금액 [날짜] [비고] — 지출 추가 (날짜 생략 시 오늘, 항목은 띄어쓰기 없이)
+· 지각 이름 금액 날짜 — 지각비 추가 (예: 지각 김기항 5000 11/2)
+· 노쇼 이름 금액 날짜 — 노쇼비 추가 (예: 노쇼 김동호 50000 11/2)
+· 이자 금액 날짜 — 정기이자 추가 (예: 이자 100 11/2)
+· 지출 항목 금액 날짜 [비고] — 지출 추가 (예: 지출 생수 3900 11/2, 항목은 띄어쓰기 없이)
 · 회비시트 / 지각시트 / 노쇼시트 / 이자시트 / 지출시트 — 결산 시트 이미지 보기
 
 [명단·선수]
@@ -755,7 +755,7 @@ def grade_sheet_text() -> str:
 
 
 def _pop_date(args: list[str], now: datetime) -> tuple[str, list[str]]:
-    """인자에서 날짜 토큰(2026-11-02, 11/2, 11.2)을 찾아 뺀다. 없으면 오늘 날짜."""
+    """인자에서 날짜 토큰(2026-11-02, 11/2, 11.2)을 찾아 뺀다. 날짜는 필수다."""
     import re
     from datetime import date
     for i, tok in enumerate(args):
@@ -770,14 +770,14 @@ def _pop_date(args: list[str], now: datetime) -> tuple[str, list[str]]:
             except ValueError:
                 raise ValueError(f"날짜가 올바르지 않아요: {tok}")
             return day.strftime("%Y-%m-%d"), args[:i] + args[i + 1:]
-    return now.strftime("%Y-%m-%d"), args
+    raise ValueError("날짜를 입력해 주세요 (예: 11/2 또는 2026-11-02).")
 
 
 def ledger_command(cmd: str, args: list[str], now: datetime) -> str:
     """2026년 결산 시트 명령 (관리자 전용). 잘못된 입력은 ValueError 로 안내 문구를 던진다."""
     import sheet_sync as ss
     today = now.strftime("%Y-%m-%d")
-    if cmd in ("지각", "노쇼", "이자", "지출"):  # 날짜를 입력하면 그 날짜, 없으면 오늘
+    if cmd in ("지각", "노쇼", "이자", "지출"):  # 날짜는 필수
         today, args = _pop_date(args, now)
 
     def amount_of(tok: str) -> int:
@@ -808,7 +808,7 @@ def ledger_command(cmd: str, args: list[str], now: datetime) -> str:
         return ss.ledger_pay_dues(args[0], month)
     if cmd in ("지각", "노쇼"):
         if len(args) < 2:
-            raise ValueError(f"사용법: {cmd} 이름 금액  (예: {cmd} 김기항 5000)")
+            raise ValueError(f"사용법: {cmd} 이름 금액 날짜  (예: {cmd} 김기항 5000 11/2)")
         name, amt = args[0], amount_of(args[1])
         if name not in ss.ledger_members():
             raise ValueError(f"결산 명단에 없는 이름이에요: {name}")
@@ -816,13 +816,13 @@ def ledger_command(cmd: str, args: list[str], now: datetime) -> str:
         return f"✅ {cmd} {name} {amt:,}원 추가 (오늘 {today}, 결산 시트 반영)"
     if cmd == "이자":
         if not args:
-            raise ValueError("사용법: 이자 금액  (예: 이자 100)")
+            raise ValueError("사용법: 이자 금액 날짜  (예: 이자 100 11/2)")
         amt = amount_of(args[0])
         ss.ledger_add("이자", [today, "정기이자", amt])
         return f"✅ 정기이자 {amt:,}원 추가 (오늘 {today}, 결산 시트 반영)"
     if cmd == "지출":
         if len(args) < 2:
-            raise ValueError("사용법: 지출 항목 금액 [비고]  (예: 지출 생수 3900 2L*6)")
+            raise ValueError("사용법: 지출 항목 금액 날짜 [비고]  (예: 지출 생수 3900 11/2 2L*6)")
         item, amt = args[0], amount_of(args[1])
         note = " ".join(args[2:])
         ss.ledger_add("지출", [today, item, amt, note])
