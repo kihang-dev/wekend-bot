@@ -201,12 +201,17 @@ def ensure_year_ledger(year):
         new = prev.duplicate(new_sheet_name=title)
         names = new.col_values(LEDGER_NAME_COL)
         last = max(i for i, v in enumerate(names, start=1) if i > 1 and v.strip())
-        ranges = [f"D2:O{last}"]
+        new.batch_clear([f"D2:O{last}"])
+        requests = []
         for label_col, c1, c2 in LEDGER_BLOCKS.values():
             r = _ledger_total_row(new, label_col)
-            if r > 2:
-                ranges.append(gspread.utils.rowcol_to_a1(2, c1) + ":" + gspread.utils.rowcol_to_a1(r - 1, c2))
-        new.batch_clear(ranges)
+            if r > 2:  # 기록 줄을 위로 당겨서 계가 2행에 오게 한다 (블록 열만 이동)
+                requests.append({"deleteRange": {"range": {"sheetId": new.id, "startRowIndex": 1,
+                                                         "endRowIndex": r - 1, "startColumnIndex": c1 - 1,
+                                                         "endColumnIndex": c2},
+                                                "shiftDimension": "ROWS"}})
+        if requests:
+            new.spreadsheet.batch_update({"requests": requests})
         for kind, (label_col, _c1, _c2) in LEDGER_BLOCKS.items():
             _rewrite_total(new, kind, _ledger_total_row(new, label_col))
         new.update(values=[[balance]], range_name="D33", value_input_option="USER_ENTERED")
