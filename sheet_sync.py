@@ -449,3 +449,48 @@ def ledger_wide_range():
     """R1부터 지출 계 행까지, 지출 계 오른쪽 한 칸(AG)까지의 범위."""
     r = _ledger_total_row(_ledger_ws(), LEDGER_BLOCKS["지출"][0])
     return f"R1:AG{r}"
+
+
+GRADE_I_FORMULA = '=(COUNTIF(C{r}:H{r},"A")*4)+(COUNTIF(C{r}:H{r},"B")*3)+(COUNTIF(C{r}:H{r},"C")*2)+(COUNTIF(C{r}:H{r},"D")*1)'
+GRADE_J_FORMULA = ('=IF(RANK(I{r},$I$2:$I${last},0)<=ROUNDUP(COUNT($I$2:$I${last})*0.02,0),"A+",'
+                   'IF(RANK(I{r},$I$2:$I${last},0)<=ROUNDUP(COUNT($I$2:$I${last})*0.1,0),"A",'
+                   'IF(RANK(I{r},$I$2:$I${last},0)<=ROUNDUP(COUNT($I$2:$I${last})*0.3,0),"B+",'
+                   'IF(RANK(I{r},$I$2:$I${last},0)<=ROUNDUP(COUNT($I$2:$I${last})*0.6,0),"B",'
+                   'IF(RANK(I{r},$I$2:$I${last},0)<=ROUNDUP(COUNT($I$2:$I${last})*0.9,0),"C","D")))))')
+
+
+def add_member_rows(name, grades6, first, second):
+    """신규 선수를 등급 시트(행 추가 + 합산·등급 수식)와 결산 명단(A~P열 행 추가, 회비대상 O)에 넣는다."""
+    out = []
+    gc = gspread.service_account(filename=str(KEY_PATH))
+    gws = gc.open_by_key(GRADE_SHEET_ID).worksheet(GRADE_TAB)
+    gnames = [n.strip() for n in gws.col_values(2)]
+    if name in gnames:
+        out.append("등급 시트: 이미 있어요")
+    else:
+        L = max(i for i, v in enumerate(gnames, start=1) if i > 1 and v)
+        new = L + 1
+        gws.spreadsheet.batch_update({"requests": [{"insertDimension": {
+            "range": {"sheetId": gws.id, "dimension": "ROWS", "startIndex": new - 1, "endIndex": new},
+            "inheritFromBefore": True}}]})
+        row = [new - 1, name] + [grades6[k] for k in ABILITY_COLS] \
+            + [GRADE_I_FORMULA.format(r=new), GRADE_J_FORMULA.format(r=new, last=new), first, second]
+        gws.update(values=[row], range_name=f"A{new}:L{new}", value_input_option="USER_ENTERED")
+        jvals = [[GRADE_J_FORMULA.format(r=r, last=new)] for r in range(2, new + 1)]
+        gws.update(values=jvals, range_name=f"J2:J{new}", value_input_option="USER_ENTERED")
+        out.append(f"등급 시트: {new}행에 추가")
+    with _ledger_lock:
+        lws = _ledger_ws()
+        lnames = [n.strip() for n in lws.col_values(LEDGER_NAME_COL)]
+        if name in lnames:
+            out.append("결산 명단: 이미 있어요")
+        else:
+            L = max(i for i, v in enumerate(lnames, start=1) if i > 1 and v and i <= 27)
+            lws.spreadsheet.batch_update({"requests": [{"insertRange": {
+                "range": {"sheetId": lws.id, "startRowIndex": L - 1, "endRowIndex": L,
+                          "startColumnIndex": 0, "endColumnIndex": 16},
+                "shiftDimension": "ROWS"}}]})
+            lws.update(values=[["=ROW()-1", name, "O"]], range_name=f"A{L}:C{L}", value_input_option="USER_ENTERED")
+            lws.update(values=[[f"=SUM(D{L}:O{L})"]], range_name=f"P{L}", value_input_option="USER_ENTERED")
+            out.append(f"결산 명단: {L}행에 추가 (회비대상 O)")
+    return "\n".join(out)

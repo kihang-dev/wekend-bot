@@ -1914,7 +1914,14 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         if not parsed:
             return NEW_USAGE, []
         name, grades6, first, second = parsed
-        return add_new_player(name, grades6, first, second), []
+        msg = add_new_player(name, grades6, first, second)
+        if msg.startswith("✅"):
+            try:
+                import sheet_sync as ss
+                msg += "\n" + ss.add_member_rows(name, grades6, first, second)
+            except Exception as e:
+                msg += f"\n⚠️ 시트 추가 실패: {e}"
+        return msg, []
 
     if cmd == "선출":  # 선출 홍길동 → 등록 / 선출 홍길동 해제 → 해제 / 선출 → 목록 (합산점수 40점 고정)
         if not args:
