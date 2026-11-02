@@ -735,7 +735,10 @@ def grade_sheet_text() -> str:
     """등급 시트 A1:J25 를 이미지로 만들어 스쿼드 웹 폴더에 올리고 링크를 돌려준다."""
     png = SQUAD_PUBLISH_DIR / "grade_sheet.png"
     export_grade_sheet_png(png)
-    return "📊 등급 시트 (A1:J25)\n" + f"{SQUAD_URL.rstrip('/')}/grade_sheet.png"
+    import time
+    globals()["PENDING_IMAGE"] = {"url": f"{SQUAD_URL.rstrip('/')}/grade_sheet.png?v={int(time.time())}",
+                                  "alt": "등급 시트 (A1:J25)"}
+    return ""
 
 
 def set_seonchul(name: str, on: bool) -> str:
@@ -2526,6 +2529,7 @@ async def heartbeat(ws, interval: float) -> None:
 
 
 PENDING_MENTIONS = None  # 멘션 답장 준비 (미응답 명령이 설정, reply 가 사용 후 비움)
+PENDING_IMAGE = None  # 이미지 답장 준비 (등급시트가 설정, reply 가 사용 후 비움)
 
 
 async def reply(token: str, callback_token: str, text: str, buttons: list) -> None:
@@ -2553,6 +2557,11 @@ async def reply(token: str, callback_token: str, text: str, buttons: list) -> No
                 return
 
     async with httpx.AsyncClient() as client:
+        image = globals().get("PENDING_IMAGE")  # 이미지만 보내는 답장 (등급시트)
+        globals()["PENDING_IMAGE"] = None
+        if image:
+            await send_first_ok(client, [body_of([{"simpleImage": {"imageUrl": image["url"], "altText": image["alt"]}}])])
+            return
         if pending:  # 멘션 답장 → 실패하면 이름만 적힌 평문 답장
             mention_body = {"skillResponse": {"version": "2.0",
                                               "template": {"outputs": [{"simpleText": {"text": pending["text"]}}]},
