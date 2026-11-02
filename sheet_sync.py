@@ -146,3 +146,69 @@ def export_grade_sheet_png(out_png):
                    check=True, timeout=60)
     pdf.unlink(missing_ok=True)
     return out_png
+
+
+# ---- 2026년 결산 탭 (같은 스프레드시트 파일 안의 gid 탭) ----
+LEDGER_SHEET_ID = "1a1j-EgDG6JxeNez3RzfgF7DCnhc5cVBFMnDoRMYiyvk"
+LEDGER_GID = 164012503
+DUES_AMOUNT = 5000
+# 블록: (계 라벨 열, 첫 열, 끝 열), 1부터 시작
+LEDGER_BLOCKS = {
+    "이자": (19, 18, 20),   # R 날짜, S 항목, T 금액
+    "지각": (23, 22, 24),   # V 날짜, W 이름, X 금액
+    "노쇼": (27, 26, 28),   # Z 날짜, AA 이름, AB 금액
+    "지출": (31, 30, 33),   # AD 날짜, AE 항목, AF 금액, AG 비고
+}
+LEDGER_NAME_COL = 2      # B 이름 (2행~27행)
+LEDGER_DUES_COL = 3      # C 회비대상여부
+LEDGER_MONTH_OFFSET = 3  # D = 1월 → 열 번호 = 3 + 월
+_ledger_lock = threading.Lock()
+
+
+def _ledger_ws():
+    gc = gspread.service_account(filename=str(KEY_PATH))
+    return gc.open_by_key(LEDGER_SHEET_ID).get_worksheet_by_id(LEDGER_GID)
+
+
+def ledger_members():
+    ws = _ledger_ws()
+    return [n.strip() for n in ws.col_values(LEDGER_NAME_COL)[1:27] if n.strip()]
+
+
+def ledger_add(kind, values):
+    """블록 kind 의 '계' 행 위치에 한 줄을 넣는다. 블록 열만 아래로 밀므로 다른 표는 그대로이고,
+    합계 수식은 구글 시트가 범위를 자동으로 늘린다."""
+    label_col, c1, c2 = LEDGER_BLOCKS[kind]
+    with _ledger_lock:
+        ws = _ledger_ws()
+        col = ws.col_values(label_col)
+        r = next((i for i, v in enumerate(col, start=1) if i > 1 and v.strip() == "계"), None)
+        if r is None:
+            raise ValueError(f"{kind} 블록에서 '계' 행을 찾지 못했어요.")
+        ws.spreadsheet.batch_update({"requests": [{"insertRange": {
+            "range": {"sheetId": ws.id, "startRowIndex": r - 1, "endRowIndex": r,
+                      "startColumnIndex": c1 - 1, "endColumnIndex": c2},
+            "shiftDimension": "ROWS"}}]})
+        a1 = gspread.utils.rowcol_to_a1(r, c1) + ":" + gspread.utils.rowcol_to_a1(r, c2)
+        ws.update(values=[values], range_name=a1, value_input_option="USER_ENTERED")
+    return r
+
+
+def ledger_pay_dues(name, month):
+    """회비 대상(O)인 선수의 해당 월 칸에 회비를 넣는다. 이미 값이 있으면 건드리지 않는다."""
+    with _ledger_lock:
+        ws = _ledger_ws()
+        names = [n.strip() for n in ws.col_values(LEDGER_NAME_COL)]
+        if name not in names[1:27]:
+            raise ValueError(f"결산 명단에 없는 이름이에요: {name}")
+        row = names.index(name) + 1
+        status = (ws.cell(row, LEDGER_DUES_COL).value or "").strip()
+        if status != "O":
+            raise ValueError(f"{name} 님은 회비 대상이 아니에요 (회비대상여부: {status or '-'})")
+        col = LEDGER_MONTH_OFFSET + month
+        cur = (ws.cell(row, col).value or "").strip()
+        if cur:
+            return f"{name} {month}월 회비는 이미 입력되어 있어요 ({cur})."
+        ws.update(values=[[DUES_AMOUNT]], range_name=gspread.utils.rowcol_to_a1(row, col),
+                  value_input_option="USER_ENTERED")
+    return f"✅ {name} {month}월 회비 {DUES_AMOUNT:,}원 납부 처리 (결산 시트 반영)"

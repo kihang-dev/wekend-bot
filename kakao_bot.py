@@ -743,6 +743,48 @@ def grade_sheet_text() -> str:
     return ""
 
 
+def ledger_command(cmd: str, args: list[str], now: datetime) -> str:
+    """2026년 결산 시트 명령 (관리자 전용). 잘못된 입력은 ValueError 로 안내 문구를 던진다."""
+    import sheet_sync as ss
+    today = now.strftime("%Y-%m-%d")
+
+    def amount_of(tok: str) -> int:
+        t = tok.replace(",", "")
+        if not t.isdigit():
+            raise ValueError(f"금액은 숫자로 입력해 주세요: {tok}")
+        return int(t)
+
+    if cmd == "회비":
+        if not args:
+            raise ValueError("사용법: 회비 이름 [월]  (예: 회비 김기항 11, 월 생략 시 이번 달)")
+        month = int(args[1]) if len(args) > 1 and args[1].isdigit() else now.month
+        if not 1 <= month <= 12:
+            raise ValueError("월은 1~12 사이로 입력해 주세요.")
+        return ss.ledger_pay_dues(args[0], month)
+    if cmd in ("지각", "노쇼"):
+        if len(args) < 2:
+            raise ValueError(f"사용법: {cmd} 이름 금액  (예: {cmd} 김기항 5000)")
+        name, amt = args[0], amount_of(args[1])
+        if name not in ss.ledger_members():
+            raise ValueError(f"결산 명단에 없는 이름이에요: {name}")
+        ss.ledger_add(cmd, [today, name, amt])
+        return f"✅ {cmd} {name} {amt:,}원 추가 (오늘 {today}, 결산 시트 반영)"
+    if cmd == "이자":
+        if not args:
+            raise ValueError("사용법: 이자 금액  (예: 이자 100)")
+        amt = amount_of(args[0])
+        ss.ledger_add("이자", [today, "정기이자", amt])
+        return f"✅ 정기이자 {amt:,}원 추가 (오늘 {today}, 결산 시트 반영)"
+    if cmd == "지출":
+        if len(args) < 2:
+            raise ValueError("사용법: 지출 항목 금액 [비고]  (예: 지출 생수 3900 2L*6)")
+        item, amt = args[0], amount_of(args[1])
+        note = " ".join(args[2:])
+        ss.ledger_add("지출", [today, item, amt, note])
+        return f"✅ 지출 {item} {amt:,}원 추가 (오늘 {today}, 결산 시트 반영)"
+    raise ValueError("알 수 없는 결산 명령이에요.")
+
+
 def set_seonchul(name: str, on: bool) -> str:
     """grades.py 의 SEONCHUL_PLAYERS 목록에 선출을 넣거나 뺀다. 바꾼 뒤 GitHub 에 커밋·푸시한다."""
     import subprocess
@@ -1416,7 +1458,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기", "명단삭제", "등급시트"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기", "명단삭제", "등급시트", "회비", "지각", "노쇼", "이자", "지출"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1793,6 +1835,13 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return GRADE_USAGE, []
         return set_player_grades(name, mode, changes), []
 
+    if cmd in ("회비", "지각", "노쇼", "이자", "지출"):  # 2026년 결산 시트 (관리자 전용)
+        try:
+            return ledger_command(cmd, args, now or now_kst()), []
+        except ValueError as e:
+            return str(e), []
+        except Exception as e:
+            return f"결산 시트 처리 실패: {e}", []
     if cmd == "등급시트":  # 등급시트 → 등급 시트 A1:J25 캡처 링크
         try:
             return grade_sheet_text(), []
