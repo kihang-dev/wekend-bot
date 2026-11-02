@@ -84,3 +84,23 @@ def sync_abilities_async(name, abilities):
             except Exception as e:
                 print("시트 등급 동기화 실패:", repr(e))
     threading.Thread(target=job, daemon=True).start()
+
+
+def _clear_grade_row(name):
+    gc = gspread.service_account(filename=str(KEY_PATH))
+    ws = gc.open_by_key(GRADE_SHEET_ID).worksheet(GRADE_TAB)
+    names = ws.col_values(2)
+    if name not in names:
+        return
+    row = names.index(name) + 1
+    ws.batch_clear([f"B{row}:H{row}"])
+
+
+def sheet_clear_grade_row_async(name):
+    def job():
+        with _lock:
+            try:
+                _clear_grade_row(name)
+            except Exception as e:
+                print("시트 등급 행 삭제 실패:", repr(e))
+    threading.Thread(target=job, daemon=True).start()

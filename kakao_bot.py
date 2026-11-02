@@ -23,6 +23,7 @@ REST API (.env 에 API_KEY 를 넣으면 켜짐, 문서: http://서버:8000/docs
 import asyncio
 import copy
 import json
+from sheet_sync import sheet_clear_grade_row_async
 import os
 import secrets
 import shlex
@@ -695,6 +696,41 @@ GRADE_USAGE = ("사용법\n"
                "  (순서: 패스 리턴 수비 드리블 볼소유 골결정력 / 등급: A B C D)")
 
 
+def delete_roster_player(name: str) -> str:
+    """명단(grades.json)과 포지션(positions.json)에서 선수를 지우고 GitHub 에 커밋·푸시한다."""
+    import subprocess
+    gpath = SQUAD_REPO / "grades.json"
+    ppath = SQUAD_REPO / "positions.json"
+    if not gpath.exists():
+        raise PollError(f"grades.json 을 찾을 수 없어요: {gpath}", 500)
+    with SQUAD_LOCK:
+        pull_squad()
+        gdata = json.loads(gpath.read_text(encoding="utf-8"))
+        if name not in gdata:
+            return f"{name} 은(는) 명단에 없어요."
+        del gdata[name]
+        gpath.write_text(json.dumps(gdata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        files = ["grades.json"]
+        pdata = json.loads(ppath.read_text(encoding="utf-8")) if ppath.exists() else {}
+        if name in pdata:
+            del pdata[name]
+            ppath.write_text(json.dumps(pdata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            files.append("positions.json")
+
+        def run(*args):
+            return subprocess.run(["git", *args], cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
+
+        run("add", *files)
+        r = run("commit", "-m", f"명단 삭제: {name}")
+        if r.returncode != 0 and "nothing to commit" not in (r.stdout + r.stderr):
+            raise PollError(f"커밋 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
+        r = run("push", "origin", "HEAD")
+        if r.returncode != 0:
+            raise PollError(f"GitHub 푸시 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
+    sheet_clear_grade_row_async(name)
+    return f"🗑️ {name} 명단에서 삭제했어요 (GitHub 반영, 등급 시트 행도 비움)"
+
+
 def set_seonchul(name: str, on: bool) -> str:
     """grades.py 의 SEONCHUL_PLAYERS 목록에 선출을 넣거나 뺀다. 바꾼 뒤 GitHub 에 커밋·푸시한다."""
     import subprocess
@@ -1319,7 +1355,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기", "명단삭제"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1696,6 +1732,11 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             return GRADE_USAGE, []
         return set_player_grades(name, mode, changes), []
 
+    if cmd == "명단삭제":  # 명단삭제 김민규 → 명단·포지션에서 삭제 (GitHub 반영)
+        name = " ".join(args).strip()
+        if not name:
+            return "사용법: 명단삭제 이름", []
+        return delete_roster_player(name), []
     if cmd == "명단":  # weekenders-futsal 의 전체 명단
         return roster_text(), []
 
