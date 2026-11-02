@@ -2,7 +2,7 @@
 # uv run 시 아래 의존성을 자동 설치합니다 (pip install 불필요)
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["httpx>=0.27", "websockets>=15.0", "fastapi>=0.110", "uvicorn>=0.29"]
+# dependencies = ["httpx>=0.27", "websockets>=15.0", "fastapi>=0.110", "uvicorn>=0.29", "gspread>=6,<7", "google-auth"]
 # ///
 """
 카톡 명령어 (앞의 ! 는 생략 가능, 단체방 멘션도 인식)
