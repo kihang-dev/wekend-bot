@@ -109,7 +109,8 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 지출 항목 금액 날짜 [비고] — 지출 추가 (예: 지출 생수 3900 11/2, 항목은 띄어쓰기 없이)
 · 지각삭제 날짜 이름 금액 / 노쇼삭제 날짜 이름 금액 — 기록 삭제 (세 값이 모두 맞아야 삭제)
 · 이자삭제 날짜 금액 / 지출삭제 날짜 항목 금액 — 기록 삭제 (같은 기록이 여러 개면 삭제 안 함)
-· 결산시트 회비|지각|노쇼|이자|지출 — 결산 시트 이미지 보기 (예: 결산시트 지각)
+· 결산시트 — 이자·지각·노쇼·지출 이미지 한꺼번에 보기
+· 결산시트 회비|지각|노쇼|이자|지출 — 항목별 이미지 보기 (예: 결산시트 지각)
 
 [명단·선수]
 · 명단 — 전체 명단 보기
@@ -890,6 +891,17 @@ async def ledger_year_loop(stop: asyncio.Event) -> None:
             await asyncio.wait_for(stop.wait(), timeout=1800)
         except asyncio.TimeoutError:
             pass
+
+
+def ledger_all_image_text() -> str:
+    """이자·지각·노쇼·지출 블록을 한 장의 이미지로 만들어 이미지 답장을 준비한다."""
+    import time
+    import sheet_sync as ss
+    png = SQUAD_PUBLISH_DIR / "ledger_all.png"
+    ss.export_blocks_png(["이자", "지각", "노쇼", "지출"], png)
+    globals()["PENDING_IMAGE"] = {"url": f"{SQUAD_URL.rstrip('/')}/ledger_all.png?v={int(time.time())}",
+                                  "alt": "결산 이자·지각·노쇼·지출"}
+    return ""
 
 
 def set_seonchul(name: str, on: bool) -> str:
@@ -1950,8 +1962,13 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         except Exception as e:
             return f"결산 시트 처리 실패: {e}", []
     if cmd == "결산시트":  # 결산시트 지각 → 지각 블록 이미지 (관리자 전용)
+        if not args:
+            try:
+                return ledger_all_image_text(), []
+            except Exception as e:
+                return f"결산 시트 캡처 실패: {e}", []
         kinds = ("회비", "지각", "노쇼", "이자", "지출")
-        if not args or args[0] not in kinds:
+        if args[0] not in kinds:
             return "사용법: 결산시트 회비|지각|노쇼|이자|지출  (예: 결산시트 지각)", []
         try:
             return ledger_image_text(args[0] + "시트"), []

@@ -423,3 +423,23 @@ def ledger_delete(kind, date_str, key, amount):
             "shiftDimension": "ROWS"}}]})
         _rewrite_total(ws, kind, r - 1)  # 계가 한 줄 위로 올라왔으니 합계를 다시 쓴다
     return row
+
+
+def export_blocks_png(kinds, out_png):
+    """여러 결산 블록을 각각 PNG로 찍어 세로로 이어 붙인 한 장을 만든다."""
+    from PIL import Image
+    parts = []
+    for kind in kinds:
+        part = out_png.with_name(f"{out_png.stem}_{kind}.png")
+        export_range_png(LEDGER_SHEET_ID, _ledger_ws().id, ledger_view_range(kind), part)
+        parts.append(part)
+    imgs = [Image.open(p).convert("RGB") for p in parts]
+    canvas = Image.new("RGB", (max(i.width for i in imgs), sum(i.height for i in imgs)), "white")
+    y = 0
+    for im in imgs:
+        canvas.paste(im, (0, y))
+        y += im.height
+    canvas.save(out_png)
+    for p in parts:
+        p.unlink(missing_ok=True)
+    return out_png
