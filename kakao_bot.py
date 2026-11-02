@@ -109,7 +109,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 · 지출 항목 금액 날짜 [비고] — 지출 추가 (예: 지출 생수 3900 11/2, 항목은 띄어쓰기 없이)
 · 지각삭제 날짜 이름 금액 / 노쇼삭제 날짜 이름 금액 — 기록 삭제 (세 값이 모두 맞아야 삭제)
 · 이자삭제 날짜 금액 / 지출삭제 날짜 항목 금액 — 기록 삭제 (같은 기록이 여러 개면 삭제 안 함)
-· 결산시트 — 이자·지각·노쇼·지출 이미지 한꺼번에 보기
+· 결산시트 — 결산 표 이미지 보기 (R1부터 지출 계 오른쪽 칸까지)
 · 결산시트 회비|지각|노쇼|이자|지출 — 항목별 이미지 보기 (예: 결산시트 지각)
 
 [명단·선수]
@@ -898,7 +898,7 @@ def ledger_all_image_text() -> str:
     import time
     import sheet_sync as ss
     png = SQUAD_PUBLISH_DIR / "ledger_all.png"
-    ss.export_blocks_png(["이자", "지각", "노쇼", "지출"], png)
+    ss.export_range_png(ss.LEDGER_SHEET_ID, ss.ledger_gid(), ss.ledger_wide_range(), png)
     globals()["PENDING_IMAGE"] = {"url": f"{SQUAD_URL.rstrip('/')}/ledger_all.png?v={int(time.time())}",
                                   "alt": "결산 이자·지각·노쇼·지출"}
     return ""

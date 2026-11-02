@@ -443,3 +443,9 @@ def export_blocks_png(kinds, out_png):
     for p in parts:
         p.unlink(missing_ok=True)
     return out_png
+
+
+def ledger_wide_range():
+    """R1부터 지출 계 행까지, 지출 계 오른쪽 한 칸(AG)까지의 범위."""
+    r = _ledger_total_row(_ledger_ws(), LEDGER_BLOCKS["지출"][0])
+    return f"R1:AG{r}"
