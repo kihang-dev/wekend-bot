@@ -755,6 +755,18 @@ def delete_roster_player(name: str) -> str:
     with SQUAD_LOCK:
         pull_squad()
         gdata = json.loads(gpath.read_text(encoding="utf-8"))
+        in_repo = name in gdata
+    if not in_repo:  # 이전에 시트 정리만 실패했을 수 있으니 시트는 다시 정리해 본다
+        try:
+            import sheet_sync as ss
+            out = ss.remove_member_rows(name)
+        except Exception as e:
+            out = f"⚠️ 시트 삭제 실패: {e}"
+        if all(line.endswith("그대로") for line in out.splitlines()):
+            return f"{name} 은(는) 명단에 없어요."
+        return f"🗑️ {name} 은(는) 명단에 없어서 시트만 정리했어요\n{out}"
+    with SQUAD_LOCK:
+        gdata = json.loads(gpath.read_text(encoding="utf-8"))  # 방금 받았으니 다시 pull 하지 않고 다시 읽기만 한다
         if name not in gdata:
             return f"{name} 은(는) 명단에 없어요."
         del gdata[name]
@@ -2038,7 +2050,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             find_poll_by_id(polls, room, pid)  # 없는 투표면 여기서 안내
         else:
             _require(polls, room, now)
-        if args:  # "참석 홍길동" → 이름 등록도 함께
+        if args and not _load(USERS_FILE).get(user_key):  # 이름이 없을 때만 "참석 홍길동" → 이름 등록도 함께
             register_name(user_key, " ".join(args))
         name = _load(USERS_FILE).get(user_key)
         if not name:
