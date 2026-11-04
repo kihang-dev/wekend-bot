@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HERE/backups/$(date +%Y%m%d)"
 mkdir -p "$DEST"
 copied=0
-for f in polls.json dormant.json users.json links.json room_members.json schedule.json; do
+for f in polls.json dormant.json users.json links.json room_members.json schedule.json admins.json; do
   if [ -f "$HERE/$f" ]; then
     cp -p "$HERE/$f" "$DEST/" && copied=$((copied + 1))
   fi

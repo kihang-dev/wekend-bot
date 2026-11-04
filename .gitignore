@@ -23,3 +23,18 @@ room_members.json
 
 backups/
 grade_snapshot.json
+
+# 백업·임시 파일 (자동 커밋 대상에서 제외)
+*.bak*
+*.before_*.py
+.patch_*.py
+*.tmp
+
+# 로컬 전용 상태·비밀 (깃에 올리지 않음)
+index.html
+dormant.json
+schedule.json
+link_attempts.json
+google-key.json
+admins.json
+backup.log

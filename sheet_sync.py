@@ -1,4 +1,4 @@
-from pathlib import Path
+import re
 import threading
 from pathlib import Path
 
@@ -163,7 +163,30 @@ LEDGER_BLOCKS = {
 LEDGER_NAME_COL = 2      # B 이름 (2행~27행)
 LEDGER_DUES_COL = 3      # C 회비대상여부
 LEDGER_MONTH_OFFSET = 3  # D = 1월 → 열 번호 = 3 + 월
+# 이월금·잔액 칸: 글자(두 줄 병합) 바로 아래가 값이다. 선수 행을 끼워 넣으면 함께 내려가므로 글자로 찾는다.
+LEDGER_CARRY = (4, "이월금")    # D31:D32 글자, D33 값
+LEDGER_BALANCE = (10, "잔액")   # J31:J32 글자, J33 값
+LEDGER_LABEL_ROW = 31           # 선수를 끼워 넣기 전 이월금 글자 행
+LEDGER_MEMBER_END = 27          # 그때의 명단 마지막 행 (글자가 내려간 만큼 함께 내려간다)
 _ledger_lock = threading.Lock()
+
+
+def _ledger_label_row(ws, col, label):
+    r = next((i for i, v in enumerate(ws.col_values(col), start=1) if i > 1 and v.strip() == label), None)
+    if r is None:
+        raise ValueError(f"결산 탭에서 '{label}' 글자를 찾지 못했어요.")
+    return r
+
+
+def _ledger_value_cell(ws, spec):
+    """이월금/잔액 값 칸 (글자 두 줄 아래)."""
+    col, label = spec
+    return gspread.utils.rowcol_to_a1(_ledger_label_row(ws, col, label) + 2, col)
+
+
+def _ledger_member_end(ws):
+    """명단 마지막 행. 선수를 추가해 이월금 글자가 내려간 만큼 27행에서 늘어난다."""
+    return LEDGER_MEMBER_END + _ledger_label_row(ws, *LEDGER_CARRY) - LEDGER_LABEL_ROW
 
 
 def _ledger_spreadsheet():
@@ -188,20 +211,20 @@ def ledger_gid():
 
 def ensure_year_ledger(year):
     """year 결산 탭이 없으면 전년도 탭을 복제해 만든다.
-    이월금(D33)은 전년도 잔액(J33)을 숫자로 넣고, 월별 회비와 기록 블록은 비운다. 이름·회비대상여부는 유지."""
+    이월금(기본 D33)은 전년도 잔액(기본 J33)을 숫자로 넣고, 월별 회비와 기록 블록은 비운다. 이름·회비대상여부는 유지."""
     with _ledger_lock:
         sh = _ledger_spreadsheet()
         title = f"{year}년 결산"
         if any(w.title == title for w in sh.worksheets()):
             return False
         prev = sh.worksheet(f"{year - 1}년 결산")
-        balance = prev.acell("J33", value_render_option="UNFORMATTED_VALUE").value
+        bal_cell = _ledger_value_cell(prev, LEDGER_BALANCE)
+        balance = prev.acell(bal_cell, value_render_option="UNFORMATTED_VALUE").value
         if not isinstance(balance, (int, float)):
-            raise ValueError(f"{year - 1}년 결산 J33(잔액)을 숫자로 읽지 못했어요: {balance!r}")
+            raise ValueError(f"{year - 1}년 결산 {bal_cell}(잔액)을 숫자로 읽지 못했어요: {balance!r}")
         new = prev.duplicate(new_sheet_name=title)
-        names = new.col_values(LEDGER_NAME_COL)
-        last = max(i for i, v in enumerate(names, start=1) if i > 1 and v.strip())
-        new.batch_clear([f"D2:O{last}"])
+        carry_cell = _ledger_value_cell(new, LEDGER_CARRY)
+        new.batch_clear([f"D2:O{_ledger_member_end(new)}"])  # 명단 칸만 비운다 (이월금·잔액 글자는 그대로)
         requests = []
         for label_col, c1, c2 in LEDGER_BLOCKS.values():
             r = _ledger_total_row(new, label_col)
@@ -214,13 +237,13 @@ def ensure_year_ledger(year):
             new.spreadsheet.batch_update({"requests": requests})
         for kind, (label_col, _c1, _c2) in LEDGER_BLOCKS.items():
             _rewrite_total(new, kind, _ledger_total_row(new, label_col))
-        new.update(values=[[balance]], range_name="D33", value_input_option="USER_ENTERED")
+        new.update(values=[[balance]], range_name=carry_cell, value_input_option="USER_ENTERED")
     return True
 
 
 def ledger_members():
     ws = _ledger_ws()
-    return [n.strip() for n in ws.col_values(LEDGER_NAME_COL)[1:27] if n.strip()]
+    return [n.strip() for n in ws.col_values(LEDGER_NAME_COL)[1:_ledger_member_end(ws)] if n.strip()]
 
 
 def ledger_add(kind, values):
@@ -248,7 +271,7 @@ def ledger_pay_dues(name, month):
     with _ledger_lock:
         ws = _ledger_ws()
         names = [n.strip() for n in ws.col_values(LEDGER_NAME_COL)]
-        if name not in names[1:27]:
+        if name not in names[1:_ledger_member_end(ws)]:
             raise ValueError(f"결산 명단에 없는 이름이에요: {name}")
         row = names.index(name) + 1
         status = (ws.cell(row, LEDGER_DUES_COL).value or "").strip()
@@ -459,31 +482,65 @@ GRADE_J_FORMULA = ('=IF(RANK(I{r},$I$2:$I${last},0)<=ROUNDUP(COUNT($I$2:$I${last
                    'IF(RANK(I{r},$I$2:$I${last},0)<=ROUNDUP(COUNT($I$2:$I${last})*0.9,0),"C","D")))))')
 
 
+_RANK_END_RE = re.compile(r"(:\$I\$)(\d+)")
+
+
+def _extend_rank_ranges(ws, last):
+    """J열 등급 수식의 순위 범위 끝(:$I$숫자)이 last 보다 작으면 last 로 늘린다.
+    수식의 나머지 부분은 그대로 두고, 바뀐 칸만 다시 쓴다. 바꾼 칸 수를 돌려준다."""
+    formulas = ws.get(f"J2:J{last}", value_render_option="FORMULA")
+    updates = []
+    for r, row in enumerate(formulas, start=2):
+        f = row[0] if row else ""
+        if not isinstance(f, str) or not f.startswith("="):
+            continue
+        g = _RANK_END_RE.sub(lambda m: m.group(1) + str(last) if int(m.group(2)) < last else m.group(0), f)
+        if g != f:
+            updates.append({"range": f"J{r}", "values": [[g]]})
+    if updates:
+        ws.batch_update(updates, value_input_option="USER_ENTERED")
+    return len(updates)
+
+
 def add_member_rows(name, grades6, first, second):
     """신규 선수를 등급 시트(행 추가 + 합산·등급 수식)와 결산 명단(A~P열 행 추가, 회비대상 O)에 넣는다."""
     out = []
-    gc = gspread.service_account(filename=str(KEY_PATH))
-    gws = gc.open_by_key(GRADE_SHEET_ID).worksheet(GRADE_TAB)
-    gnames = [n.strip() for n in gws.col_values(2)]
-    if name in gnames:
-        out.append("등급 시트: 이미 있어요")
-    else:
-        L = max(i for i, v in enumerate(gnames, start=1) if i > 1 and v)
-        new = L + 1
-        gws.spreadsheet.batch_update({"requests": [{"insertDimension": {
-            "range": {"sheetId": gws.id, "dimension": "ROWS", "startIndex": new - 1, "endIndex": new},
-            "inheritFromBefore": True}}]})
-        row = [new - 1, name] + [grades6[k] for k in ABILITY_COLS] \
-            + [GRADE_I_FORMULA.format(r=new), GRADE_J_FORMULA.format(r=new, last=new), first, second]
-        gws.update(values=[row], range_name=f"A{new}:L{new}", value_input_option="USER_ENTERED")
-        out.append(f"등급 시트: {new}행에 추가")
+    with _lock:
+        gc = gspread.service_account(filename=str(KEY_PATH))
+        gws = gc.open_by_key(GRADE_SHEET_ID).worksheet(GRADE_TAB)
+        gnames = [n.strip() for n in gws.col_values(2)]
+        if name in gnames:
+            out.append("등급 시트: 이미 있어요")
+        else:
+            L = max((i for i, v in enumerate(gnames, start=1) if i > 1 and v), default=1)
+            new = L + 1
+            requests = [{"insertDimension": {
+                "range": {"sheetId": gws.id, "dimension": "ROWS", "startIndex": new - 1, "endIndex": new},
+                "inheritFromBefore": True}}]
+            if L >= 2:  # 합산(I)·등급(J) 수식은 바로 윗줄 수식을 복사한다 (C{r} 같은 상대 참조는 새 행에 맞게 바뀜)
+                requests.append({"copyPaste": {
+                    "source": {"sheetId": gws.id, "startRowIndex": L - 1, "endRowIndex": L,
+                               "startColumnIndex": 8, "endColumnIndex": 10},
+                    "destination": {"sheetId": gws.id, "startRowIndex": new - 1, "endRowIndex": new,
+                                    "startColumnIndex": 8, "endColumnIndex": 10},
+                    "pasteType": "PASTE_FORMULA"}})
+            gws.spreadsheet.batch_update({"requests": requests})
+            values = [{"range": f"A{new}:H{new}", "values": [[new - 1, name] + [grades6[k] for k in ABILITY_COLS]]},
+                      {"range": f"K{new}:L{new}", "values": [[first, second]]}]
+            if L < 2:  # 복사할 윗줄이 없으면 기본 수식을 넣는다
+                values.append({"range": f"I{new}:J{new}", "values": [[GRADE_I_FORMULA.format(r=new),
+                                                                       GRADE_J_FORMULA.format(r=new, last=new)]]})
+            gws.batch_update(values, value_input_option="USER_ENTERED")
+            fixed = _extend_rank_ranges(gws, new)
+            out.append(f"등급 시트: {new}행에 추가 (등급 수식 {fixed}개 범위를 {new}행까지 늘림)")
     with _ledger_lock:
         lws = _ledger_ws()
         lnames = [n.strip() for n in lws.col_values(LEDGER_NAME_COL)]
         if name in lnames:
             out.append("결산 명단: 이미 있어요")
         else:
-            L = max(i for i, v in enumerate(lnames, start=1) if i > 1 and v and i <= 27)
+            end = _ledger_member_end(lws)
+            L = max(i for i, v in enumerate(lnames, start=1) if i > 1 and v and i <= end)
             lws.spreadsheet.batch_update({"requests": [{"insertRange": {
                 "range": {"sheetId": lws.id, "startRowIndex": L - 1, "endRowIndex": L,
                           "startColumnIndex": 0, "endColumnIndex": 16},

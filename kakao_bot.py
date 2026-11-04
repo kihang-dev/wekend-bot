@@ -54,6 +54,7 @@ ROOM_MEMBERS_FILE = HERE / "room_members.json"
 DORMANT_FILE = HERE / "dormant.json"  # 휴면 인원 (미응답 명단에서 제외)  # 방별 botUserKey -> 이름 (이 방에서 실제로 쓰인 키만)
 SETTINGS_FILE = HERE / "settings.json"  # 경기 시간 같은 설정 (깃에 올리지 않음)
 LINK_FILE = HERE / "link_codes.json"  # 일반/오픈채팅 연결용 임시 코드 (깃에 올리지 않음)
+LINK_ATTEMPTS_FILE = HERE / "link_attempts.json"  # 연결 코드를 틀린 기록 (깃에 올리지 않음)
 LINKS_FILE = HERE / "links.json"  # 같은 사람으로 묶인 카톡 키 목록 {묶음번호: [키, ...]} (깃에 올리지 않음)
 DEFAULT_START_HOUR = 8
 LOG_FILE = HERE / "events.log"
@@ -187,15 +188,24 @@ SIDES = {"참석": "attend", "불참": "absent"}
 
 
 # ============================ 저장소 ============================
+# 상태 파일(polls/users/links 등)을 읽고 고치고 쓰는 동안 잡는 자물쇠.
+# 명령 처리와 백그라운드 루프(자동 마감·알림)가 같은 파일을 동시에 건드리지 않게 한다.
+_STATE_LOCK = threading.Lock()
+
+
 def _load(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
+    except FileNotFoundError:
         return {}
+    except json.JSONDecodeError as e:
+        # 깨진 파일을 빈 값으로 읽으면 다음 저장 때 전부 지워지므로 멈춘다
+        raise RuntimeError(f"{path.name} 파일이 깨져서 읽을 수 없어요 ({e})") from e
 
 
 def _save(path: Path, data: dict) -> None:
-    tmp = path.with_suffix(".tmp")
+    # 스레드마다 다른 임시 파일을 써서 동시에 저장해도 서로 섞이지 않게 한다
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)  # 쓰는 도중 꺼져도 파일이 깨지지 않도록
 
@@ -321,10 +331,20 @@ def group_keys(user_key: str) -> list[str]:
     return [user_key]
 
 
+PLAYER_NAME_RE = re.compile(r"[가-힣A-Za-z]+( [가-힣A-Za-z]+){0,2}")
+
+
+def valid_player_name(name: str) -> bool:
+    """이름은 한글·영문 1~3단어, 12자 이하만 허용한다 (따옴표·기호·줄바꿈은 막는다)."""
+    return len(name) <= 12 and PLAYER_NAME_RE.fullmatch(name) is not None
+
+
 def register_name(user_key: str, name: str) -> str:
     name = name.strip()
     if not name:
         raise PollError("이름을 입력해주세요.")
+    if not valid_player_name(name):
+        raise PollError("이름은 한글·영문 1~3단어, 12자 이하로 입력해주세요. 예) 이름 홍길동")
     group = set(group_keys(user_key))
     users = _load(USERS_FILE)
     if any(n == name and k not in group for k, n in users.items()):  # 동명이인 등록 불가 (같은 사람의 묶인 키는 제외)
@@ -452,6 +472,8 @@ def cast_vote(room: str, user_key: str, name: str, side: str,
 
 def set_attendance(room: str, name: str, side: str, no: int | None = None) -> dict:
     """투표의 참석/불참을 바꾼다 (번호 생략 시 가장 최근 투표). 마감 후에도 가능하다. 명단에 없으면 새로 넣는다."""
+    if not valid_player_name(name):
+        raise PollError(f"이름 형식이 맞지 않아요: {name}")
     polls = load_polls()
     if no is None:
         lst = polls.get(room) or []
@@ -508,6 +530,8 @@ def update_poll(room: str, date_str: str | None = None, place: str | None = None
 
 
 def replace_member(room: str, a: str, b: str, no: int | None = None) -> dict:
+    if not valid_player_name(b):
+        raise PollError(f"이름 형식이 맞지 않아요: {b}")
     polls = load_polls()
     poll = _require(polls, room) if no is None else find_by_no(polls, room, no)
     key_a = next((k for k, n in poll["attend"].items() if n == a), None)
@@ -569,6 +593,9 @@ def delete_poll(room: str, no: int | None = None) -> str:
 def add_mercenaries(room: str, date_str: str | None, names: list[str],
                     now: datetime | None = None) -> tuple[dict, list[str], list[str]]:
     """해당 날짜 투표(날짜 생략 시 최근 투표)의 참석자 명단에 용병을 추가한다. (투표, 추가된 이름, 이미 명단에 있던 이름)"""
+    bad = [n for n in names if not valid_player_name(n)]
+    if bad:
+        raise PollError(f"이름 형식이 맞지 않아요: {', '.join(bad)} (한글·영문 12자 이하)")
     polls = load_polls()
     if date_str is None:  # 날짜 생략 → 가장 최근 투표
         lst = polls.get(room) or []
@@ -746,12 +773,23 @@ def delete_roster_player(name: str) -> str:
     return f"🗑️ {name} 명단에서 삭제했어요 (GitHub 반영, 등급 시트 행도 비움)"
 
 
+def _secret_name(base: str) -> str:
+    """공개 폴더에 올릴 이미지 이름. 추측할 수 없도록 비밀 토큰을 붙인다 (토큰은 schedule.json 에 저장, 깃에 올리지 않음)."""
+    marks = _load(SCHEDULE_FILE)
+    tok = marks.get("img_token")
+    if not tok:
+        tok = secrets.token_urlsafe(16)
+        marks["img_token"] = tok
+        _save(SCHEDULE_FILE, marks)
+    return f"{base}_{tok}.png"
+
+
 def grade_sheet_text() -> str:
     """등급 시트 A1:J25 를 이미지로 만들어 스쿼드 웹 폴더에 올리고 링크를 돌려준다."""
-    png = SQUAD_PUBLISH_DIR / "grade_sheet.png"
+    png = SQUAD_PUBLISH_DIR / _secret_name("grade_sheet")
     export_grade_sheet_png(png)
     import time
-    globals()["PENDING_IMAGE"] = {"url": f"{SQUAD_URL.rstrip('/')}/grade_sheet.png?v={int(time.time())}",
+    globals()["PENDING_IMAGE"] = {"url": f"{SQUAD_URL.rstrip('/')}/{png.name}?v={int(time.time())}",
                                   "alt": "등급 시트 (A1:J25)"}
     return ""
 
@@ -858,9 +896,9 @@ def ledger_image_text(cmd: str) -> str:
     import sheet_sync as ss
     kind = LEDGER_IMAGE_CMDS[cmd]
     rng = ss.ledger_view_range(kind)
-    png = SQUAD_PUBLISH_DIR / f"ledger_{kind}.png"
+    png = SQUAD_PUBLISH_DIR / _secret_name(f"ledger_{kind}")
     ss.export_range_png(ss.LEDGER_SHEET_ID, ss.ledger_gid(), rng, png)
-    globals()["PENDING_IMAGE"] = {"url": f"{SQUAD_URL.rstrip('/')}/ledger_{kind}.png?v={int(time.time())}",
+    globals()["PENDING_IMAGE"] = {"url": f"{SQUAD_URL.rstrip('/')}/{png.name}?v={int(time.time())}",
                                   "alt": f"{kind} 시트 ({rng})"}
     return ""
 
@@ -896,9 +934,9 @@ def ledger_all_image_text() -> str:
     """이자·지각·노쇼·지출 블록을 한 장의 이미지로 만들어 이미지 답장을 준비한다."""
     import time
     import sheet_sync as ss
-    png = SQUAD_PUBLISH_DIR / "ledger_all.png"
+    png = SQUAD_PUBLISH_DIR / _secret_name("ledger_all")
     ss.export_range_png(ss.LEDGER_SHEET_ID, ss.ledger_gid(), ss.ledger_wide_range(), png)
-    globals()["PENDING_IMAGE"] = {"url": f"{SQUAD_URL.rstrip('/')}/ledger_all.png?v={int(time.time())}",
+    globals()["PENDING_IMAGE"] = {"url": f"{SQUAD_URL.rstrip('/')}/{png.name}?v={int(time.time())}",
                                   "alt": "결산 이자·지각·노쇼·지출"}
     return ""
 
@@ -1318,14 +1356,27 @@ def push_squad(commit_msg: str) -> bool:
     return True
 
 
-def pull_squad() -> None:
-    """팀배정 로직 최신화: export_html 호출 전에 weekenders-futsal 을 pull."""
+def pull_squad() -> bool:
+    """팀배정 로직 최신화: export_html 호출 전에 weekenders-futsal 을 pull. 성공하면 True.
+    실패해도 로컬 파일로 계속 진행한다. 충돌로 rebase 가 멈춰 있으면 되돌려서 다음 명령이 막히지 않게 한다."""
     import subprocess
+    ok = False
     try:
-        subprocess.run(["git", "pull", "--rebase", "--autostash", "origin", "HEAD"],
-                       cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(["git", "pull", "--rebase", "--autostash", "origin", "HEAD"],
+                           cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
+        ok = r.returncode == 0
+        if not ok:
+            print("squad pull 실패 (로컬 파일로 진행):", (r.stderr or r.stdout).strip()[:300])
     except (OSError, subprocess.TimeoutExpired) as e:
         print("squad pull 경고 (무시하고 진행):", repr(e))
+    git_dir = SQUAD_REPO / ".git"
+    if not ok and ((git_dir / "rebase-merge").exists() or (git_dir / "rebase-apply").exists()):
+        try:
+            subprocess.run(["git", "rebase", "--abort"], cwd=SQUAD_REPO, capture_output=True, text=True, timeout=60)
+            print("squad pull: rebase 충돌 → 되돌림 (밀리지 않은 로컬 커밋은 그대로 남음)")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print("squad rebase 되돌리기 실패:", repr(e))
+    return ok
 
 
 SQUAD_LOCK = threading.Lock()  # 팀 구성은 한 번에 하나씩
@@ -1372,9 +1423,8 @@ def clear_seonchul_locked() -> bool:
     if not path.exists():
         print("선출 초기화 건너뜀: grades.py 없음")
         return False
-    r = run("pull", "--rebase", "origin", "HEAD")  # 먼저 최신으로 받는다
-    if r.returncode != 0:
-        print("선출 초기화: pull 실패 (건너뜀):", r.stderr)
+    if not pull_squad():  # 먼저 최신으로 받는다
+        print("선출 초기화: pull 실패 (건너뜀)")
         return False
     src = path.read_text(encoding="utf-8")
     m = re.search(r"SEONCHUL_PLAYERS = \[(.*?)\]", src, re.S)
@@ -1388,7 +1438,7 @@ def clear_seonchul_locked() -> bool:
         return False
     r = run("push", "origin", "HEAD")
     if r.returncode != 0:  # 그 사이 원격이 바뀌었으면 받고 한 번 더 시도
-        run("pull", "--rebase", "origin", "HEAD")
+        pull_squad()
         r = run("push", "origin", "HEAD")
     if r.returncode != 0:
         print("선출 초기화 푸시 실패:", r.stderr)
@@ -1450,6 +1500,11 @@ def mark_squad_started(poll_id: str, now: datetime) -> dict | None:
 
 
 def close_due_polls(now: datetime) -> list[tuple[str, dict]]:
+    with _STATE_LOCK:
+        return _close_due_polls_unlocked(now)
+
+
+def _close_due_polls_unlocked(now: datetime) -> list[tuple[str, dict]]:
     """마감 시각이 막 지난(10분 이내) 투표를 마감 처리하고 팀을 짠다. 예전 투표는 건드리지 않는다."""
     polls = load_polls()
     started = []
@@ -1664,6 +1719,12 @@ def _poll_room(cmd: str, args: list[str], room: str, now: datetime | None) -> st
 
 
 def handle(text: str, user_key: str, room: str, now: datetime | None = None) -> tuple[str, list] | None:
+    """카톡 명령 진입점. 상태 파일 잠금을 잡고 처리한다."""
+    with _STATE_LOCK:
+        return _handle_unlocked(text, user_key, room, now)
+
+
+def _handle_unlocked(text: str, user_key: str, room: str, now: datetime | None = None) -> tuple[str, list] | None:
     """카톡 명령어를 처리하고 (답장 텍스트, 버튼 목록) 을 돌려준다. 명령어가 아니면 None."""
     _remember_room_member(room, user_key)
     parsed = parse_command(text)
@@ -1694,8 +1755,29 @@ def _parse_no(s: str) -> int:
     return int(s)
 
 
-ALLOWED_NAMES = {"김민규", "이성학", "김기항"}  # 나머지 명령어를 쓸 수 있는 닉네임
+ALLOWED_NAMES = {"김민규", "이성학", "김기항"}  # 관리자 키를 처음 만들 때만 쓰는 이름 (권한은 키로 확인)
 OPEN_COMMANDS = {"이름", "참석", "불참", "연결"}  # 이름 등록과 참석/불참은 누구나 쓸 수 있다
+ADMIN_FILE = HERE / "admins.json"  # 관리자 botUserKey 목록 (깃에 올리지 않음)
+
+
+def admin_keys() -> set:
+    """관리자 키 목록 + .env 의 ADMIN_KEYS(쉼표 구분).
+    admins.json 이 없으면 지금 users.json 에서 ALLOWED_NAMES 이름으로 등록된 키로 한 번만 만든다.
+    이후에는 이름을 바꾸거나 같은 이름을 등록해도 권한이 따라가지 않는다."""
+    data = _load(ADMIN_FILE)
+    if "keys" not in data:
+        users = _load(USERS_FILE)
+        data = {"keys": sorted(k for k, n in users.items() if n in ALLOWED_NAMES)}
+        _save(ADMIN_FILE, data)
+        print(f"관리자 키 {len(data['keys'])}개로 admins.json 생성")
+    keys = set(data["keys"])
+    keys |= {k.strip() for k in os.environ.get("ADMIN_KEYS", "").split(",") if k.strip()}
+    return keys
+
+
+def is_admin(user_key: str) -> bool:
+    """이 키(또는 같은 사람으로 묶인 키)가 관리자 키인지."""
+    return bool(set(group_keys(user_key)) & admin_keys())
 
 
 def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime | None,
@@ -1708,7 +1790,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         my_name = _load(USERS_FILE).get(user_key)
         if not my_name:
             return "먼저 '@위켄봇 이름 [닉네임]'으로 이름을 등록해 주세요.", []
-        if my_name not in ALLOWED_NAMES:
+        if not is_admin(user_key):
             return "이 명령은 지정된 멤버만 쓸 수 있어요.", []
 
     if cmd == "도움말":
@@ -1792,19 +1874,33 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             my_name = _load(USERS_FILE).get(user_key)
             if not my_name:
                 return "먼저 '@위켄봇 이름 [닉네임]'으로 이름을 등록해 주세요.", []
-            code = f"{secrets.randbelow(9000) + 1000}"
+            code = f"{secrets.randbelow(900000) + 100000}"
             while code in codes:
-                code = f"{secrets.randbelow(9000) + 1000}"
+                code = f"{secrets.randbelow(900000) + 100000}"
             codes[code] = {"key": user_key, "name": my_name,
                            "exp": (now_ts + timedelta(minutes=10)).isoformat()}
             _save(LINK_FILE, codes)
             return (f"🔗 연결 코드: {code}\n10분 안에 다른 방에서 '@위켄봇 연결 {code}'을 입력해 주세요."), []
+        attempts = _load(LINK_ATTEMPTS_FILE)
+        rec = attempts.get(user_key) or {}
+        if rec.get("until") and datetime.fromisoformat(rec["until"]) > now_ts:
+            return "연결 코드를 여러 번 틀려서 30분 동안 막혔어요. 잠시 뒤에 다시 시도해 주세요.", []
         entry = codes.get(args[0])
         if not entry:
+            recent = [t for t in rec.get("fails", []) if datetime.fromisoformat(t) > now_ts - timedelta(minutes=10)]
+            recent.append(now_ts.isoformat())
+            rec = {"fails": recent} if len(recent) < 5 else {"until": (now_ts + timedelta(minutes=30)).isoformat()}
+            attempts[user_key] = rec
+            _save(LINK_ATTEMPTS_FILE, attempts)
             _save(LINK_FILE, codes)
             return "코드가 맞지 않거나 만료됐어요. '@위켄봇 연결'로 새 코드를 받아 주세요.", []
         if entry["key"] == user_key:
             return "같은 방에서 받은 코드예요. 다른 방에서 입력해 주세요.", []
+        my_name = _load(USERS_FILE).get(user_key)
+        # 관리자 키와 묶이면 다른 키도 관리자가 되므로 막는다 (관리자 새 키는 .env ADMIN_KEYS 로 추가)
+        if is_admin(entry["key"]) or is_admin(user_key) \
+                or entry["name"] in ALLOWED_NAMES or my_name in ALLOWED_NAMES:
+            return "관리자 이름은 연결 기능으로 바꿀 수 없어요.", []
         # 두 키를 한 묶음으로 저장하고, 묶인 키 전부 같은 이름으로 맞춘다
         merged = set(group_keys(entry["key"])) | set(group_keys(user_key))
         links = {g: ks for g, ks in _load(LINKS_FILE).items()
@@ -1846,7 +1942,7 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
 
     if cmd in SIDES:
         if args and not (args[0].startswith("#") or args[0].isdigit()) \
-                and _load(USERS_FILE).get(user_key) in ALLOWED_NAMES:
+                and is_admin(user_key):
             # 관리자: 참석 김기항 / 불참 김기항 → 그 사람의 참석·불참을 바꾼다 (마감 후에도 가능)
             names = [a.strip('"') for a in args if a.strip('"')]  # 띄어쓰기로 여러 명 가능: 참석 김기항 김민규
             cur = (load_polls().get(room) or [])
@@ -2235,12 +2331,17 @@ def make_api(api_key: str):
         if x_api_key != api_key:
             raise HTTPException(401, "API 키가 올바르지 않아요.")
 
+    def _api_state_lock():
+        # API 요청도 명령과 같은 잠금 안에서 상태 파일을 고친다
+        with _STATE_LOCK:
+            yield
+
     app = FastAPI(
         title="위켄 봇 API",
         description="카카오톡 투표 봇의 투표 데이터를 조회·관리합니다. 모든 요청에 `X-API-Key` 헤더가 필요합니다.\n\n"
         "`room` 은 카톡방 키입니다. `GET /polls` 로 확인하세요.",
         version="1.0",
-        dependencies=[Depends(auth)],
+        dependencies=[Depends(auth), Depends(_api_state_lock)],
     )
 
     @app.exception_handler(PollError)
@@ -2307,6 +2408,8 @@ def make_api(api_key: str):
 
     @app.post("/polls/{room}/votes", summary="이름으로 참석/불참 기록")
     def vote(room: str, body: Vote):
+        if not valid_player_name(body.name):
+            raise PollError("이름 형식이 맞지 않아요. 한글·영문 12자 이하로 입력해 주세요.")
         users = _load(USERS_FILE)
         key = next((k for k, n in users.items() if n == body.name), f"manual:{body.name}")
         return poll_view(room, cast_vote(room, key, body.name, SIDES[body.status], poll_id=body.poll))
@@ -2471,6 +2574,11 @@ REMIND_BEFORE = timedelta(hours=1)  # 마감 1시간 전 (마감 23:00 → 22:00
 
 
 def weekly_tick(now: datetime) -> tuple[str, dict | None]:
+    with _STATE_LOCK:
+        return _weekly_tick_unlocked(now)
+
+
+def _weekly_tick_unlocked(now: datetime) -> tuple[str, dict | None]:
     """정기 투표를 확인하고 결과를 돌려준다: ('created', 투표) / ('skipped', None) / ('', None)."""
     try:
         poll = _make_weekly_poll(now)
@@ -2499,20 +2607,37 @@ async def send_auto_close_notice(token: str, room: str, poll: dict) -> None:
     await send_room_message(token, room, text, {}, [])
 
 
+def _mark_once(field: str, value: str) -> bool:
+    """marks[field] 가 value 가 아니면 value 로 바꾸고 True. 이미 같으면 False (잠금 안에서 처리)."""
+    with _STATE_LOCK:
+        marks = _load(SCHEDULE_FILE)
+        if marks.get(field) == value:
+            return False
+        marks[field] = value
+        _save(SCHEDULE_FILE, marks)
+        return True
+
+
+def _add_reminded(poll_id: str) -> None:
+    with _STATE_LOCK:
+        marks = _load(SCHEDULE_FILE)
+        marks.setdefault("reminded", []).append(poll_id)
+        _save(SCHEDULE_FILE, marks)
+
+
 DUES_AMOUNT = "5,000원"
-DUES_ACCOUNT = "카카오뱅크 7942-23-58646"
+DUES_ACCOUNT = os.environ.get("DUES_ACCOUNT", "").strip()  # 회비 입금 계좌 (.env, 저장소에 두지 않음)
 
 
 async def maybe_send_dues(token: str, now: datetime) -> None:
     """매월 1일 9시 이후 처음 한 번, 정기 투표 방에 회비 입금 안내를 보낸다 (멘션 없음)."""
     if now.day != 1 or now.hour < 9:
         return
-    key = now.strftime("%Y-%m")
-    marks = _load(SCHEDULE_FILE)
-    if marks.get("dues") == key:  # 이번 달에 이미 보냄
+    if not DUES_ACCOUNT:  # .env 에 DUES_ACCOUNT 가 없으면 안내를 보내지 않는다
         return
-    marks["dues"] = key  # 먼저 표시해서 중복 발송을 막는다
-    _save(SCHEDULE_FILE, marks)
+    key = now.strftime("%Y-%m")
+    if not _mark_once("dues", key):  # 이번 달에 이미 보냄 (먼저 표시해서 중복 발송을 막는다)
+        return
     text = (f"💰 {now.month}월 회비 안내\n"
             f"회비: {DUES_AMOUNT}\n"
             f"입금 계좌: {DUES_ACCOUNT}\n"
@@ -2583,9 +2708,7 @@ async def remind_unanswered_loop(token: str, stop: asyncio.Event) -> None:
                 try:
                     responded = set(p["attend"].values()) | set(p["absent"].values())
                     waiting = [n for n in roster_names() if n not in responded]
-                    marks = _load(SCHEDULE_FILE)
-                    marks.setdefault("reminded", []).append(p["id"])  # 먼저 표시해서 중복 발송을 막는다
-                    _save(SCHEDULE_FILE, marks)
+                    _add_reminded(p["id"])  # 먼저 표시해서 중복 발송을 막는다
                     if not waiting:
                         continue
                     keys = room_key_names(room)
@@ -2638,6 +2761,16 @@ async def weekly_poll_loop(token: str, stop: asyncio.Event) -> None:
             pass
 
 
+def purge_old_public_images() -> None:
+    """예전 방식(추측 가능한 이름)으로 올라간 이미지를 지운다. 실패해도 봇은 계속 돈다."""
+    names = ["grade_sheet.png", "ledger_all.png"] + [f"ledger_{k}.png" for k in ("회비", "지각", "노쇼", "이자", "지출")]
+    for n in names:
+        try:
+            (SQUAD_PUBLISH_DIR / n).unlink(missing_ok=True)
+        except OSError as e:
+            print("예전 공개 이미지 삭제 실패:", n, repr(e))
+
+
 async def main() -> int:
     import websockets
 
@@ -2648,6 +2781,7 @@ async def main() -> int:
     start_head = git("rev-parse", "HEAD")
     fix_open_deadlines(now_kst())  # 생성일 기준 마감 (진행중 투표 한 번 보정)
     pull_squad()  # 봇을 켤 때마다 스쿼드 레포를 최신으로
+    purge_old_public_images()
     print(f"봇 시작 (버전 {start_head[:7] or '알수없음'})")
     stop = asyncio.Event()
     if start_head:
