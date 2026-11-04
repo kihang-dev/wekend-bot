@@ -1804,7 +1804,7 @@ def dues_status_text(names: list[str], status: str, on: bool) -> str:
 
 
 ALLOWED_NAMES = {"김민규", "이성학", "김기항"}  # 관리자 키를 처음 만들 때만 쓰는 이름 (권한은 키로 확인)
-OPEN_COMMANDS = {"이름", "참석", "불참", "연결"}  # 이름 등록과 참석/불참은 누구나 쓸 수 있다
+OPEN_COMMANDS = {"이름", "참석", "불참"}  # 이름 등록과 참석/불참은 누구나 쓸 수 있다 (연결은 막음)
 # 이 방들에서는 관리자를 포함해 누구나 아래 명령만 쓸 수 있다 (방키 명령으로 확인한 방의 키)
 LIMITED_ROOMS = {"bg2_aT-gVOURKGGR8EANLPFAp3utsa0xQOu1Mw"}
 LIMITED_ROOM_COMMANDS = {"이름", "참석", "불참"}
