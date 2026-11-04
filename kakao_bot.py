@@ -1672,6 +1672,14 @@ def parse_command(text: str) -> tuple[str, list[str]] | None:
     return cmd, args
 
 
+def _slash_command(text: str) -> bool:
+    """명령 단어를 '/'로 시작해 보냈는지 ("/참석", "@위켄봇 /참석")."""
+    words = (text or "").split()
+    if words and words[0].startswith("@"):
+        words = words[1:4]
+    return any(w.startswith("/") and w.lstrip("!/") in COMMANDS for w in words[:3])
+
+
 BOT_MENTION = "@위켄"  # 단체방에서 봇을 부르는 이름 (@위켄봇, @위켄 봇 모두)
 UNKNOWN_HINT = "❓ 알 수 없는 명령이에요.\n사용법은 @위켄봇 도움말 을 입력해주세요."
 
@@ -1740,6 +1748,8 @@ def _handle_unlocked(text: str, user_key: str, room: str, now: datetime | None =
     """카톡 명령어를 처리하고 (답장 텍스트, 버튼 목록) 을 돌려준다. 명령어가 아니면 None."""
     _remember_room_member(room, user_key)
     parsed = parse_command(text)
+    if parsed and room in LIMITED_ROOMS and _slash_command(text):  # 제한 방: "/참석" 같은 슬래시 명령은 무시
+        return None
     if not parsed:
         # 봇을 불렀는데 명령을 모르면 도움말 안내 (일반 대화에는 답하지 않는다)
         if (text or "").startswith(BOT_MENTION) and len((text or "").split()) >= 2:
