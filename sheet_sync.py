@@ -391,6 +391,41 @@ def fix_ledger_totals():
             _rewrite_total(ws, kind, _ledger_total_row(ws, label_col))
 
 
+def ledger_set_dues_status(names, status, only_if=None):
+    """결산 명단의 회비대상여부(C열)를 status 로 바꾼다. only_if 가 있으면 지금 값이 그것일 때만 바꾼다.
+    반환 (바꾼 이름, 결산 명단에 없는 이름, 그대로 둔 이름)."""
+    with _ledger_lock:
+        ws = _ledger_ws()
+        end = _ledger_member_end(ws)
+        members = [n.strip() for n in ws.col_values(LEDGER_NAME_COL)][:end]
+        current = ws.col_values(LEDGER_DUES_COL)
+        changed, missing, kept, updates = [], [], [], []
+        for name in names:
+            if name not in members[1:]:
+                missing.append(name)
+                continue
+            row = members.index(name, 1) + 1
+            cur = current[row - 1].strip() if row - 1 < len(current) else ""
+            if cur == status or (only_if is not None and cur != only_if):
+                kept.append(name)
+                continue
+            updates.append({"range": gspread.utils.rowcol_to_a1(row, LEDGER_DUES_COL), "values": [[status]]})
+            changed.append(name)
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+    return changed, missing, kept
+
+
+def ledger_names_with_status(status):
+    """회비대상여부(C열)가 status 인 선수 이름 목록."""
+    ws = _ledger_ws()
+    end = _ledger_member_end(ws)
+    names = ws.col_values(LEDGER_NAME_COL)
+    current = ws.col_values(LEDGER_DUES_COL)
+    return [names[r - 1].strip() for r in range(2, min(end, len(names)) + 1)
+            if names[r - 1].strip() and r - 1 < len(current) and current[r - 1].strip() == status]
+
+
 def ledger_unpaid(month):
     """회비 대상(O)이면서 해당 월 칸이 비어 있는 선수 이름 목록."""
     with _ledger_lock:

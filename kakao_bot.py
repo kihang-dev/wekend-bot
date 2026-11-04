@@ -116,7 +116,8 @@ HELP_TEXT = """📖 위켄봇 사용법
 [명단·선수]
 · 명단 — 전체 명단 보기
 · 명단삭제 김민규 — 명단·포지션에서 삭제 (GitHub 반영, 등급 시트 행 비움)
-· 휴면 김기항 — 휴면 등록 (미응답에서 제외) / 휴면 김기항 해제 / 휴면 — 목록
+· 휴면 김기항 — 휴면 등록 (미응답에서 제외, 회비대상여부 '휴면') / 휴면 김기항 해제 / 휴면 — 목록
+· 취준 김기항 / 학생 김기항 — 회비대상여부 '취준'·'학생'으로 변경 / … 해제 → O / 취준·학생 — 목록
 · 선출 홍길동 — 선출 등록
 · 선출 홍길동 해제 — 선출 해제
 · 선출 — 선출 목록
@@ -1631,7 +1632,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "이력", "정기", "명단삭제", "등급시트", "회비", "지각", "노쇼", "이자", "지출", "회비시트", "지각시트", "노쇼시트", "이자시트", "지출시트", "지각삭제", "노쇼삭제", "이자삭제", "지출삭제", "결산시트"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "취준", "학생", "이력", "정기", "명단삭제", "등급시트", "회비", "지각", "노쇼", "이자", "지출", "회비시트", "지각시트", "노쇼시트", "이자시트", "지출시트", "지각삭제", "노쇼삭제", "이자삭제", "지출삭제", "결산시트"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1755,6 +1756,31 @@ def _parse_no(s: str) -> int:
     return int(s)
 
 
+DUES_EXEMPT = ("취준", "학생")  # 회비대상여부(C열)에 그대로 적는 회비 제외 사유 (휴면도 같은 방식)
+
+
+def dues_status_text(names: list[str], status: str, on: bool) -> str:
+    """결산 시트 회비대상여부를 바꾸고 결과 문구를 돌려준다.
+    등록: status 로 바꾼다. 해제: 지금 값이 status 일 때만 'O'(회비 대상)로 되돌린다. 실패해도 명령은 계속한다."""
+    import sheet_sync as ss
+    try:
+        if on:
+            changed, missing, kept = ss.ledger_set_dues_status(names, status)
+        else:
+            changed, missing, kept = ss.ledger_set_dues_status(names, "O", only_if=status)
+    except Exception as e:
+        return f"⚠️ 결산 시트 회비대상여부 반영 실패: {e}"
+    lines = []
+    if changed:
+        lines.append(f"💰 회비대상여부 → {status if on else 'O'}: {', '.join(changed)}")
+    if kept:
+        why = f"이미 {status}" if on else f"{status} 아님"
+        lines.append(f"회비대상여부 그대로 ({why}): {', '.join(kept)}")
+    if missing:
+        lines.append(f"결산 명단에 없어요: {', '.join(missing)}")
+    return "\n".join(lines)
+
+
 ALLOWED_NAMES = {"김민규", "이성학", "김기항"}  # 관리자 키를 처음 만들 때만 쓰는 이름 (권한은 키로 확인)
 OPEN_COMMANDS = {"이름", "참석", "불참", "연결"}  # 이름 등록과 참석/불참은 누구나 쓸 수 있다
 ADMIN_FILE = HERE / "admins.json"  # 관리자 botUserKey 목록 (깃에 올리지 않음)
@@ -1812,14 +1838,31 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             names -= set(targets)
             _save(DORMANT_FILE, {"names": sorted(names),
                                  "since": {k: v for k, v in since.items() if k in names}})
-            return f"휴면 해제: {', '.join(targets)}", []
+            return f"휴면 해제: {', '.join(targets)}\n" + dues_status_text(targets, "휴면", False), []
         stamp = (now or now_kst()).strftime("%y.%m")  # 이미 기록된 시작 년월은 바꾸지 않는다
         for a in args:
             since.setdefault(a, stamp)
         names |= set(args)
         _save(DORMANT_FILE, {"names": sorted(names),
                              "since": {k: v for k, v in since.items() if k in names}})
-        return f"휴면 등록: {', '.join(args)} (미응답 명단에서 빠져요)", []
+        return f"휴면 등록: {', '.join(args)} (미응답 명단에서 빠져요)\n" + dues_status_text(args, "휴면", True), []
+
+    if cmd in DUES_EXEMPT:  # 취준 김기항 → 회비대상여부 '취준' / 취준 김기항 해제 → 'O' / 취준 → 목록 (학생도 같음)
+        if not args:
+            try:
+                import sheet_sync as ss
+                names = ss.ledger_names_with_status(cmd)
+            except Exception as e:
+                return f"결산 시트 읽기 실패: {e}", []
+            return (f"{cmd} 인원 :\n" + "\n".join(names)) if names else f"{cmd} 인원이 없어요.", []
+        on = not (args[0] == "해제" or args[-1] == "해제")
+        targets = [a for a in args if a != "해제"]
+        if not targets:
+            return f"사용법: {cmd} 김기항 / {cmd} 김기항 해제 / {cmd} (목록)", []
+        bad = [a for a in targets if not valid_player_name(a)]
+        if bad:
+            return f"이름 형식이 맞지 않아요: {', '.join(bad)}", []
+        return f"{cmd} {'등록' if on else '해제'}: {', '.join(targets)}\n" + dues_status_text(targets, cmd, on), []
 
     if cmd == "미응답":  # 미응답 → 진행중인 투표(방 무관) 에서 아직 참석·불참을 누르지 않은 사람 (이름 나열)
         opened = [p for lst in load_polls().values() for p in (lst or []) if not is_closed(p, now)]
