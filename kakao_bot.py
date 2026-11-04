@@ -23,7 +23,7 @@ REST API (.env 에 API_KEY 를 넣으면 켜짐, 문서: http://서버:8000/docs
 import asyncio
 import copy
 import json
-from sheet_sync import sheet_clear_grade_row_async, sync_abilities_async, read_grade_sheet, export_grade_sheet_png
+from sheet_sync import sync_abilities_async, read_grade_sheet, export_grade_sheet_png
 import os
 import secrets
 import shlex
@@ -65,29 +65,31 @@ CALLBACK_URL = "https://kapi.kakao.com/v1/bot/callback"
 
 HELP_TEXT = """📖 위켄봇 사용법
 모든 명령은 @위켄봇 으로 시작해요. 예) @위켄봇 참석
-[ ] 안에 값을 넣고, '…'는 여러 개 가능해요.
+[값] 꼭 넣기 · (값) 생략 가능 · … 여러 개 가능
 
 👋 처음 한 번
 • 이름 [이름] — 내 이름 등록
 • 연결 — 연결 코드 받기 → 다른 방에서 연결 [코드]
-   (일반·오픈채팅방의 나를 하나로 묶기)
+   일반·오픈채팅방의 나를 하나로 묶어요
 
 🗳 투표 참여
 • 투표 — 진행중인 투표 보기
 • 참석 / 불참 — 최근 투표에 응답
 • 멤버 — 참석·불참 명단
 • 미응답 — 아직 응답 안 한 사람
-• 용병 [이름1] [이름2] … — 용병 추가
+• 용병 [이름1] (이름2) … — 용병 추가
 ⏰ 마감: 다음 주 수요일 23:00
 
 🛠 투표 관리
-• 참석 [이름1] [이름2] … / 불참 [이름1] [이름2] … — 대신 바꾸기
+• 참석 [이름1] (이름2) … / 불참 [이름1] (이름2) … — 대신 바꾸기
 • 교체 [불참할 이름] [참석할 이름]
 • 장소 [장소] / 날짜 [YYMMDD]
-• 시간 [시작 시각] — 예) 시간 7 → 07:00~09:00
-• 투표종료 [번호] / 투표삭제 [번호] — 번호 생략 = 최근 투표
-• 투표조회 [번호] — 번호 생략 = 전체 목록
-• 정기 [요일] [HH:MM] — 정기 투표 자동 생성 시각 (정기 — 지금 설정)
+• 시간 (시작 시각) — 예) 시간 7 → 07:00~09:00
+   생략 = 지금 경기 시간
+• 투표종료 (번호) / 투표삭제 (번호) — 생략 = 최근 투표
+• 투표조회 (번호) — 생략 = 전체 목록
+• 정기 [요일] [HH:MM] — 정기 투표 자동 생성 시각
+   정기 — 지금 설정 보기
    ※ 요일을 바꾸면 경기 요일도 같이 바뀌어요
 🔄 마감 뒤 참석자가 바뀌면 팀을 자동으로 다시 짜요.
 
@@ -95,42 +97,45 @@ HELP_TEXT = """📖 위켄봇 사용법
 • 스쿼드 — 스쿼드 페이지 링크
 • 팀짜기 — 참석자로 팀 구성
 • 팀다시짜기 — 지금 참석자로 다시 구성
-• 팀짜기 매칭 (6명↑) / 팀짜기 자체 (10명↑)
+• 팀짜기 매칭 — 6명↑ / 팀짜기 자체 — 10명↑
 
-📌 팀 고정 (마감 후)
+📌 팀 고정 — 마감 후
 • 같은팀 [이름1] [이름2] / 다른팀 [이름1] [이름2]
 • 팀삭제 [이름1] [이름2] — 그 고정만 지우기
 • 팀삭제 — 고정 전체 초기화
 
-💰 회비 ([월] 생략 = 이번 달)
-• 회비 [이름] [월] — 5,000원 납부
-• 회비 완납 [월] — 대상자 전원 납부
-• 회비 미납 [월] — 미납자 보기
+💰 회비 — (월) 생략 = 이번 달
+• 회비 [이름] (월) — 5,000원 납부
+• 회비 완납 (월) — 대상자 전원 납부
+• 회비 미납 (월) — 미납자 보기
 
-📒 결산 기록 (날짜: 11/2 또는 2026-11-02)
+📒 결산 기록 — 날짜: 11/2 또는 2026-11-02
 • 지각 [이름] [금액] [날짜]
 • 노쇼 [이름] [금액] [날짜]
 • 이자 [금액] [날짜]
-• 지출 [항목] [금액] [날짜] [비고]
-🗑 지우기 (값이 모두 맞아야 삭제)
+• 지출 [항목] [금액] [날짜] (비고)
+🗑 지우기 — 값이 모두 맞아야 삭제
 • 지각삭제 [날짜] [이름] [금액] / 노쇼삭제도 같음
 • 이자삭제 [날짜] [금액]
 • 지출삭제 [날짜] [항목] [금액]
-🖼 결산시트 — 결산 표 이미지
-   결산시트 [회비|지각|노쇼|이자|지출] — 항목별
+🖼 결산 표 이미지
+• 결산시트 — 이자·지각·노쇼·지출 기록을 한 장으로
+• 회비시트 — 명단별 월 회비 납부표
+• 지각시트 / 노쇼시트 / 이자시트 / 지출시트 — 그 기록표만
 
 👥 명단·선수
 • 명단 — 전체 명단
 • 신규 [이름] [등급6개] [포지션1/포지션2] — 신규 선수 등록
    예) 신규 홍길동 BBCCBA ST/CB
-   (등급 순서: 패스 리턴 수비 드리블 볼소유 골결정력)
-• 포지션 [이름] [포지션1/포지션2] — 선호 포지션 바꾸기
-• 선출 [이름] / 선출 [이름] 해제 / 선출 — 목록
+   등급 순서: 패스 리턴 수비 드리블 볼소유 골결정력
+• 포지션 [이름] (포지션1/포지션2) — 선호 포지션 바꾸기
+   포지션 생략 = 지금 포지션 보기
+• 선출 [이름] (해제) / 선출 — 목록
 • 명단삭제 [이름] — 명단·포지션에서 삭제
 
-💤 회비 제외 (뒤에 '해제'를 붙이면 풀림)
-• 휴면 [이름1] [이름2] … — 미응답·회비에서 제외
-• 취준 [이름1] [이름2] … / 학생 [이름1] [이름2] … — 회비에서 제외
+💤 회비 제외 — 뒤에 (해제)를 붙이면 풀림
+• 휴면 [이름1] (이름2) … — 미응답·회비에서 제외
+• 취준 [이름1] (이름2) … / 학생 [이름1] (이름2) … — 회비에서 제외
 • 휴면 / 취준 / 학생 — 목록"""
 
 VOTE_HINT = "👉 참석 또는 불참 을 입력해주세요."
@@ -780,8 +785,13 @@ def delete_roster_player(name: str) -> str:
         r = run("push", "origin", "HEAD")
         if r.returncode != 0:
             raise PollError(f"GitHub 푸시 실패: {(r.stderr or r.stdout).strip()[:200]}", 500)
-    sheet_clear_grade_row_async(name)
-    return f"🗑️ {name} 명단에서 삭제했어요 (GitHub 반영, 등급 시트 행도 비움)"
+    msg = f"🗑️ {name} 명단에서 삭제했어요 (GitHub 반영)"
+    try:
+        import sheet_sync as ss
+        msg += "\n" + ss.remove_member_rows(name)
+    except Exception as e:
+        msg += f"\n⚠️ 시트 삭제 실패: {e}"
+    return msg
 
 
 def _secret_name(base: str) -> str:
@@ -1742,6 +1752,8 @@ def _handle_unlocked(text: str, user_key: str, room: str, now: datetime | None =
     if not parsed:
         # 봇을 불렀는데 명령을 모르면 도움말 안내 (일반 대화에는 답하지 않는다)
         if (text or "").startswith(BOT_MENTION) and len((text or "").split()) >= 2:
+            if room in LIMITED_ROOMS:
+                return "이 방에서는 참석·불참·이름 명령만 쓸 수 있어요.", []
             return UNKNOWN_HINT, []
         return None
     cmd, args = parsed
@@ -1793,6 +1805,9 @@ def dues_status_text(names: list[str], status: str, on: bool) -> str:
 
 ALLOWED_NAMES = {"김민규", "이성학", "김기항"}  # 관리자 키를 처음 만들 때만 쓰는 이름 (권한은 키로 확인)
 OPEN_COMMANDS = {"이름", "참석", "불참", "연결"}  # 이름 등록과 참석/불참은 누구나 쓸 수 있다
+# 이 방들에서는 관리자를 포함해 누구나 아래 명령만 쓸 수 있다 (방키 명령으로 확인한 방의 키)
+LIMITED_ROOMS = {"bg2_aT-gVOURKGGR8EANLPFAp3utsa0xQOu1Mw"}
+LIMITED_ROOM_COMMANDS = {"이름", "참석", "불참"}
 ADMIN_FILE = HERE / "admins.json"  # 관리자 botUserKey 목록 (깃에 올리지 않음)
 
 
@@ -1822,6 +1837,8 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         args, cmd = [cmd] + args, "수정"
     if cmd == "교체":  # 교체 김기항 김민규 → 김기항 불참, 김민규 참석 (멤버 수정과 같은 동작)
         args, cmd = ["멤버"] + args, "수정"
+    if (origin or room) in LIMITED_ROOMS and cmd not in LIMITED_ROOM_COMMANDS:
+        return "이 방에서는 참석·불참·이름 명령만 쓸 수 있어요.", []
     if cmd not in OPEN_COMMANDS:  # 이름·참석·불참 외에는 지정된 멤버만 쓸 수 있다 (도움말 포함)
         my_name = _load(USERS_FILE).get(user_key)
         if not my_name:

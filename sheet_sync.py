@@ -584,3 +584,45 @@ def add_member_rows(name, grades6, first, second):
             lws.update(values=[[f"=SUM(D{L}:O{L})"]], range_name=f"P{L}", value_input_option="USER_ENTERED")
             out.append(f"결산 명단: {L}행에 추가 (회비대상 O)")
     return "\n".join(out)
+
+
+def remove_member_rows(name):
+    """명단삭제: 등급 시트에서 선수 행을 통째로 지우고(아래 행은 위로, A열 번호 다시 매김),
+    올해 결산 명단에서도 A~P열 행을 지운다(아래 명단·합계·이월금/잔액 칸이 위로 올라감).
+    시트마다 따로 시도하고, 결과 줄을 모아 돌려준다."""
+    out = []
+    try:
+        with _lock:
+            gc = gspread.service_account(filename=str(KEY_PATH))
+            gws = gc.open_by_key(GRADE_SHEET_ID).worksheet(GRADE_TAB)
+            gnames = [n.strip() for n in gws.col_values(2)]
+            if name not in gnames[1:]:
+                out.append("등급 시트: 없는 이름이라 그대로")
+            else:
+                row = gnames.index(name, 1) + 1
+                gws.spreadsheet.batch_update({"requests": [{"deleteDimension": {
+                    "range": {"sheetId": gws.id, "dimension": "ROWS", "startIndex": row - 1, "endIndex": row}}}]})
+                rest = [n.strip() for n in gws.col_values(2)]
+                last = max((i for i, v in enumerate(rest, start=1) if i > 1 and v), default=1)
+                if last >= row:  # 지운 행 아래 번호(A열)를 1부터 다시 매긴다
+                    gws.update(values=[[r - 1] for r in range(row, last + 1)], range_name=f"A{row}:A{last}")
+                out.append(f"등급 시트: {row}행 삭제")
+    except Exception as e:
+        out.append(f"⚠️ 등급 시트 삭제 실패: {e}")
+    try:
+        with _ledger_lock:
+            lws = _ledger_ws()
+            end = _ledger_member_end(lws)
+            lnames = [n.strip() for n in lws.col_values(LEDGER_NAME_COL)][:end]
+            if name not in lnames[1:]:
+                out.append("결산 명단: 없는 이름이라 그대로")
+            else:
+                row = lnames.index(name, 1) + 1
+                lws.spreadsheet.batch_update({"requests": [{"deleteRange": {
+                    "range": {"sheetId": lws.id, "startRowIndex": row - 1, "endRowIndex": row,
+                              "startColumnIndex": 0, "endColumnIndex": 16},
+                    "shiftDimension": "ROWS"}}]})
+                out.append(f"결산 명단: {row}행 삭제 (그 선수의 올해 회비 기록도 함께 삭제)")
+    except Exception as e:
+        out.append(f"⚠️ 결산 명단 삭제 실패: {e}")
+    return "\n".join(out)
