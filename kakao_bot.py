@@ -1661,7 +1661,7 @@ def parse_command(text: str) -> tuple[str, list[str]] | None:
         start = next((i for i in range(1, min(len(words), 4)) if words[i].lstrip("!/") in COMMANDS), None)
         if start is None:
             return None
-    cmd, args = words[start].lstrip("!/"), words[start + 1:]  # "/참석" 처럼 슬래시 메뉴로 보낸 명령도 인식
+    cmd, args = words[start].lstrip("!/"), words[start + 1:]  # "/참석" 도 읽지만 처리 단계에서 무시한다
     if cmd not in COMMANDS:
         return None
     if cmd == "투표" and args[:1] in (["종료"], ["완료"], ["조회"]):  # "투표 종료/완료/조회" 도 허용
@@ -1748,7 +1748,7 @@ def _handle_unlocked(text: str, user_key: str, room: str, now: datetime | None =
     """카톡 명령어를 처리하고 (답장 텍스트, 버튼 목록) 을 돌려준다. 명령어가 아니면 None."""
     _remember_room_member(room, user_key)
     parsed = parse_command(text)
-    if parsed and room in LIMITED_ROOMS and _slash_command(text):  # 제한 방: "/참석" 같은 슬래시 명령은 무시
+    if parsed and _slash_command(text):  # "/참석" 같은 슬래시 명령은 모든 방에서 무시
         return None
     if not parsed:
         # 봇을 불렀는데 명령을 모르면 도움말 안내 (일반 대화에는 답하지 않는다)
