@@ -2654,6 +2654,8 @@ def _make_weekly_poll(now: datetime) -> dict | None:
 
 REMINDER_ON = os.environ.get("REMINDER_ON") == "1"  # .env 에 REMINDER_ON=1 일 때만 알림을 보낸다
 REMIND_BEFORE = timedelta(hours=1)  # 마감 1시간 전 (마감 23:00 → 22:00)
+MORNING_REMIND_DAYS = (0, 1, 2)  # 월·화·수 오전에도 미응답 알림
+MORNING_REMIND_HOUR = 9          # 9:00~9:59 사이에 하루 한 번 (봇이 잠깐 꺼져 있어도 이 안에 켜지면 보낸다)
 
 
 def weekly_tick(now: datetime) -> tuple[str, dict | None]:
@@ -2782,34 +2784,54 @@ def reminder_due(now: datetime) -> list[tuple[str, dict]]:
     return due
 
 
+def morning_reminder_due(now: datetime) -> list[tuple[str, dict]]:
+    """월·화·수 9시대이면 정기 투표 방의 진행중 투표 목록 (하루 한 번만, 확인하면서 오늘 날짜를 기록한다)."""
+    if now.weekday() not in MORNING_REMIND_DAYS or now.hour != MORNING_REMIND_HOUR:
+        return []
+    room = WEEKLY_POLL["room"]
+    opened = [p for p in load_polls().get(room) or [] if not is_closed(p, now)]
+    if not opened or not _mark_once("morning_reminded", now.strftime("%Y-%m-%d")):
+        return []
+    return [(room, p) for p in opened]
+
+
+async def send_unanswered(token: str, room: str, p: dict, head: str) -> None:
+    """투표 p 의 미응답 인원을 멘션해서 알린다 (참석·불참 버튼 포함). 모두 응답했으면 보내지 않는다."""
+    responded = set(p["attend"].values()) | set(p["absent"].values())
+    waiting = [n for n in roster_names() if n not in responded]
+    if not waiting:
+        return
+    keys = room_key_names(room)
+    mentions, shown = {}, []
+    for i, n in enumerate(waiting[:15]):  # 멘션은 한 답장에 최대 15명
+        k = keys.get(n)
+        if k:
+            tag = f"u{i}"
+            mentions[tag] = {"type": "botUserKey", "id": k}
+            shown.append("{{#mentions." + tag + "}}")
+        else:
+            shown.append(n)
+    text = (f"{head} 아직 응답하지 않은 분 {len(waiting)}명: " + ", ".join(shown)
+            + f"\n'{p['title']}' 참석 여부 부탁드려요. 마감: {fmt_deadline(p['deadline'])}")
+    await send_room_message(token, room, text, mentions, vote_buttons(p))
+
+
 async def remind_unanswered_loop(token: str, stop: asyncio.Event) -> None:
-    """30초마다 확인해서 마감 1시간 전 미응답 알림을 보낸다 (투표당 한 번)."""
+    """30초마다 확인해서 미응답 알림을 보낸다: 마감 1시간 전(투표당 한 번), 월·화·수 오전 9시(하루 한 번)."""
     while not stop.is_set():
         if REMINDER_ON:
             now = now_kst()
             for room, p in reminder_due(now):
                 try:
-                    responded = set(p["attend"].values()) | set(p["absent"].values())
-                    waiting = [n for n in roster_names() if n not in responded]
                     _add_reminded(p["id"])  # 먼저 표시해서 중복 발송을 막는다
-                    if not waiting:
-                        continue
-                    keys = room_key_names(room)
-                    mentions, shown = {}, []
-                    for i, n in enumerate(waiting[:15]):  # 멘션은 한 답장에 최대 15명
-                        k = keys.get(n)
-                        if k:
-                            tag = f"u{i}"
-                            mentions[tag] = {"type": "botUserKey", "id": k}
-                            shown.append("{{#mentions." + tag + "}}")
-                        else:
-                            shown.append(n)
-                    text = (f"⏰ 마감 1시간 전이에요! 아직 응답하지 않은 분 {len(waiting)}명: "
-                            + ", ".join(shown)
-                            + f"\n'{p['title']}' 참석 여부 부탁드려요. 마감: {fmt_deadline(p['deadline'])}")
-                    await send_room_message(token, room, text, mentions, vote_buttons(p))
+                    await send_unanswered(token, room, p, "⏰ 마감 1시간 전이에요!")
                 except Exception as e:
                     print("미응답 알림 오류:", repr(e))
+            for room, p in morning_reminder_due(now):
+                try:
+                    await send_unanswered(token, room, p, "☀️ 좋은 아침이에요!")
+                except Exception as e:
+                    print("아침 미응답 알림 오류:", repr(e))
         try:
             await asyncio.wait_for(stop.wait(), timeout=30)
         except asyncio.TimeoutError:
