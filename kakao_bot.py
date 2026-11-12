@@ -1753,7 +1753,7 @@ def _poll_room(cmd: str, args: list[str], room: str, now: datetime | None) -> st
         if args:  # 투표 날짜 장소 → 생성
             return room
         return open_poll_room(now) or room
-    if cmd in SIDES:  # 참석·불참: 진행중 투표가 없으면 가장 최근(마감된) 투표의 방 (관리자의 마감 후 수정용)
+    if cmd in SIDES or cmd == "멤버":  # 참석·불참·멤버: 진행중 투표가 없으면 가장 최근(마감된) 투표의 방
         return open_poll_room(now) or latest_poll_room() or room
     if cmd in POLL_SCOPED:
         return open_poll_room(now) or room
