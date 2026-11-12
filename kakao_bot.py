@@ -1727,6 +1727,14 @@ POLL_SCOPED = {"참석", "불참", "투표종료", "투표삭제", "투표조회
                "팀짜기", "팀다시짜기", "시간", "같은팀", "다른팀", "팀삭제", "미응답"}
 
 
+def latest_poll_room() -> str | None:
+    """가장 최근에 만든 투표가 있는 방의 키 (마감 여부 상관없음). 없으면 None."""
+    latest = latest_poll_any_room()
+    if latest is None:
+        return None
+    return next((r for r, lst in load_polls().items() if any(p.get("id") == latest.get("id") for p in lst or [])), None)
+
+
 def open_poll_room(now: datetime | None = None) -> str | None:
     """진행중인 투표가 있는 방의 키 (여러 개면 가장 최근에 만든 것). 없으면 None."""
     best = None
@@ -1745,6 +1753,8 @@ def _poll_room(cmd: str, args: list[str], room: str, now: datetime | None) -> st
         if args:  # 투표 날짜 장소 → 생성
             return room
         return open_poll_room(now) or room
+    if cmd in SIDES:  # 참석·불참: 진행중 투표가 없으면 가장 최근(마감된) 투표의 방 (관리자의 마감 후 수정용)
+        return open_poll_room(now) or latest_poll_room() or room
     if cmd in POLL_SCOPED:
         return open_poll_room(now) or room
     return room
@@ -2050,8 +2060,9 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             find_poll_by_id(polls, room, pid)  # 없는 투표면 여기서 안내
         else:
             _require(polls, room, now)
-        if args and not _load(USERS_FILE).get(user_key):  # 이름이 없을 때만 "참석 홍길동" → 이름 등록도 함께
-            register_name(user_key, " ".join(args))
+        if args:  # 일반 사용자는 이름 없이 '참석'·'불참'만 (이름을 붙이는 건 관리자만)
+            return ("이름을 붙인 참석·불참은 관리자만 쓸 수 있어요.\n본인은 '참석' 또는 '불참'만 입력해주세요.\n"
+                    "(이름 등록은 '이름 홍길동')"), []
         name = _load(USERS_FILE).get(user_key)
         if not name:
             return "먼저 이름을 알려주세요.\n예) 이름 홍길동\n(본인 이름을 최초 등록해주세요.)", []
