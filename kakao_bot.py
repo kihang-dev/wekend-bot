@@ -395,6 +395,8 @@ def record_history(before: dict, actor: str, cmd: str, now: datetime) -> None:
                 bn = set(b.get(side, {}).values())
                 an = set(p.get(side, {}).values())
                 if an - bn:
+                    if cmd == "용병" and side == "attend":
+                        label = "용병"
                     entries.append(f"{label} 추가: {', '.join(sorted(an - bn))}")
                 if bn - an:
                     entries.append(f"{label} 취소: {', '.join(sorted(bn - an))}")
@@ -410,6 +412,18 @@ def record_history(before: dict, actor: str, cmd: str, now: datetime) -> None:
                 changed = True
     if changed:
         _save(POLLS_FILE, polls)
+
+
+def add_history(poll: dict, actor: str, cmd: str, change: str, now: datetime | None = None) -> None:
+    """투표 데이터는 그대로인 명령(같은팀·다른팀·팀짜기 등)을 그 투표의 변경 이력에 직접 남긴다."""
+    polls = load_polls()
+    for lst in polls.values():
+        for p in lst or []:
+            if p.get("id") == poll.get("id"):
+                p.setdefault("history", []).append(
+                    {"at": (now or now_kst()).isoformat(), "by": actor, "cmd": cmd, "changes": [change]})
+                _save(POLLS_FILE, polls)
+                return
 
 
 def remember_place(place: str, now: datetime | None = None) -> None:
@@ -1727,6 +1741,10 @@ POLL_SCOPED = {"참석", "불참", "투표종료", "투표삭제", "투표조회
                "팀짜기", "팀다시짜기", "시간", "같은팀", "다른팀", "팀삭제", "미응답"}
 
 
+# 마감 뒤에도 다음 투표가 생기기 전까지는 가장 최근 투표를 대상으로 하는 명령
+LATEST_SCOPED = {"참석", "불참", "멤버", "이력", "용병"}
+
+
 def latest_poll_room() -> str | None:
     """가장 최근에 만든 투표가 있는 방의 키 (마감 여부 상관없음). 없으면 None."""
     latest = latest_poll_any_room()
@@ -1753,7 +1771,7 @@ def _poll_room(cmd: str, args: list[str], room: str, now: datetime | None) -> st
         if args:  # 투표 날짜 장소 → 생성
             return room
         return open_poll_room(now) or room
-    if cmd in SIDES or cmd == "멤버":  # 참석·불참·멤버: 진행중 투표가 없으면 가장 최근(마감된) 투표의 방
+    if cmd in LATEST_SCOPED:  # 진행중 투표가 없으면 가장 최근(마감된) 투표의 방 (다음 투표가 생기기 전까지)
         return open_poll_room(now) or latest_poll_room() or room
     if cmd in POLL_SCOPED:
         return open_poll_room(now) or room
@@ -2224,9 +2242,11 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
         start_fixed_pair(kind, args[0], args[1], poll)
         if kind == "none":
             head = f"✅ {args[0]} · {args[1]} 고정 조건을 지웠어요."
+            add_history(poll, _actor_name(user_key), cmd, f"고정 해제: {args[0]} · {args[1]}", now)
         else:
             word = "같은 팀" if kind == "same" else "다른 팀"
             head = f"✅ {args[0]} · {args[1]} → {word}으로 고정했어요."
+            add_history(poll, _actor_name(user_key), cmd, f"{word} 고정: {args[0]} · {args[1]}", now)
         return (f"{head}\n"
                 f"⚽ 저장한 뒤 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."), []
 
@@ -2243,7 +2263,11 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                 game_mode = "match"
             elif a in ("자체", "자체전"):
                 game_mode = "self"
-        return make_team(room, no, game_mode), []
+        msg = make_team(room, no, game_mode)
+        poll = latest_poll_any_room() if no is None else get_poll_no(room, no)
+        mode_word = {"match": " (매칭)", "self": " (자체전)"}.get(game_mode, "")
+        add_history(poll, _actor_name(user_key), cmd, f"팀 구성{mode_word}: {len(poll['attend'])}명", now)
+        return msg, []
 
     if cmd == "수정":
         usage = ("사용법: 장소 [새 장소] / 날짜 [YYMMDD] / 멤버 [불참할 이름] [참석할 이름]\n"
