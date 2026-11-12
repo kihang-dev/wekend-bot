@@ -92,7 +92,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 ⚽ 팀
 • 스쿼드 / 팀짜기 / 팀다시짜기
 • 팀짜기 매칭 — 6명↑ / 팀짜기 자체 — 10명↑
-• 같은팀·다른팀 [이름1] [이름2] — 마감 후 고정
+• 같은팀·다른팀 [이름1] [이름2] — 마감 후 고정 (새 투표 때 초기화)
 • 팀삭제 ([이름1] [이름2]) — 생략 = 고정 전체 삭제
 
 👥 선수
@@ -474,6 +474,7 @@ def create_poll(room: str, date_str: str, place: str, creator: str,
     polls.setdefault(room, []).append(poll)
     _save(POLLS_FILE, polls)
     remember_place(poll["place"], now)
+    start_clear_fixed_pairs(poll["title"])  # 지난 투표의 같은팀/다른팀 고정은 새 투표에서 초기화
     return poll
 
 
@@ -1627,6 +1628,21 @@ def _fixed_job(title: str, members: list[str], kind: str, a: str, b: str, seven:
             print(f"고정 팀짜기 {title}: {'완료' if ok else '실패'}" + ("" if pushed else " (GitHub push 실패)"))
         except Exception as e:
             print(f"고정 팀짜기 {title} 오류:", repr(e))
+
+
+def _clear_fixed_job(title: str) -> None:
+    """백그라운드: git pull → 같은팀/다른팀 고정 전체 삭제 → push (팀은 다시 짜지 않는다). 이미 비었으면 커밋 없음."""
+    with SQUAD_LOCK:
+        try:
+            pull_squad()
+            if update_fixed_pair_locked("all", "", ""):
+                push_squad(f"새 투표로 고정 조건 초기화: {title}")
+        except Exception as e:
+            print(f"고정 조건 초기화 {title} 오류:", repr(e))
+
+
+def start_clear_fixed_pairs(title: str) -> None:
+    threading.Thread(target=_clear_fixed_job, args=(title,), daemon=True).start()
 
 
 def start_fixed_pair(kind: str, a: str, b: str, poll: dict) -> None:
