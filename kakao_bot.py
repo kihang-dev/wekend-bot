@@ -485,7 +485,7 @@ def create_poll(room: str, date_str: str, place: str, creator: str,
     polls.setdefault(room, []).append(poll)
     _save(POLLS_FILE, polls)
     remember_place(poll["place"], now)
-    start_clear_fixed_pairs(poll["title"])  # 지난 투표의 같은팀/다른팀 고정은 새 투표에서 초기화
+    start_clear_fixed_pairs(poll["title"], room)  # 지난 투표의 같은팀/다른팀 고정은 새 투표에서 초기화
     return poll
 
 
@@ -1510,7 +1510,40 @@ def clear_members_locked() -> bool:
         return False
 
 
-def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = False, reset_members: bool = False) -> None:
+# ---- 백그라운드 작업 실패 알림 ----
+# 명령으로 시작한 작업은 명령을 입력한 방, 자동 작업(자동 마감 등)은 그 투표가 있는 방으로 알린다.
+_CMD_CTX = threading.local()
+
+
+def _poll_room_of(poll: dict) -> str | None:
+    return next((r for r, lst in load_polls().items() if any(p.get("id") == poll.get("id") for p in lst or [])), None)
+
+
+def _notify_target(poll: dict | None = None, room: str | None = None) -> str | None:
+    """실패를 알릴 방: 지금 처리 중인 명령의 방 → 지정한 방 → 투표가 있는 방."""
+    return getattr(_CMD_CTX, "room", None) or room or (_poll_room_of(poll) if poll else None)
+
+
+def notify_room_sync(room: str | None, text: str) -> None:
+    """백그라운드 스레드에서 방에 짧은 안내를 보낸다 (실패 알림용). 보내지 못해도 예외를 내지 않는다."""
+    token = os.environ.get("BOT_TOKEN")
+    if not room or not token:
+        print("실패 알림을 보낼 방이나 토큰이 없어요:", text)
+        return
+    try:
+        import httpx
+        body = {"botGroupKey": room, "skillResponse": {"version": "2.0", "template": {
+            "outputs": [{"simpleText": {"text": text}}]}}}
+        r = httpx.post("https://kapi.kakao.com/v1/bot/send_message", json=body,
+                       headers={"Authorization": f"KakaoAK {token}"}, timeout=10)
+        print("실패 알림 전송:", r.status_code, r.text)
+    except Exception as e:
+        print("실패 알림 전송 오류:", repr(e))
+
+
+def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = False, reset_members: bool = False,
+               notify: str | None = None) -> None:
+    fail = None
     with SQUAD_LOCK:
         try:
             pull_squad()
@@ -1524,15 +1557,23 @@ def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = Fal
             pushed = push_squad(f"팀 구성 업데이트: {title}")  # GitHub 에 커밋·푸시
             ok = publish_squad()  # VM 웹 페이지 갱신
             print(f"팀짜기 {title}: {'완료' if ok else '실패'}" + ("" if pushed else " (GitHub push 실패)"))
+            if not ok:
+                fail = "스쿼드 페이지를 갱신하지 못했어요"
+            elif not pushed:
+                fail = "팀은 짰지만 GitHub 에 저장하지 못했어요"
         except Exception as e:
             print(f"팀짜기 {title} 오류:", repr(e))
+            fail = f"오류가 났어요 ({type(e).__name__})"
+    if fail:  # 잠금을 푼 뒤에 알린다
+        notify_room_sync(notify, f"⚠️ '{title}' 팀 구성 실패: {fail}.\n잠시 후 '팀다시짜기'로 다시 시도해 주세요.")
 
 
 def start_squad(poll: dict, game_mode: str = "auto", reset_members: bool = False) -> None:
-    """팀 구성을 백그라운드에서 시작한다 (봇 응답이 멈추지 않도록)."""
+    """팀 구성을 백그라운드에서 시작한다 (봇 응답이 멈추지 않도록). 실패하면 방에 알린다."""
     members = list(poll["attend"].values())
     seven = poll.get("place") == "조남"  # 조남 장소면 7:7
-    threading.Thread(target=_squad_job, args=(poll["title"], members, game_mode, seven, reset_members), daemon=True).start()
+    threading.Thread(target=_squad_job, args=(poll["title"], members, game_mode, seven, reset_members,
+                                              _notify_target(poll)), daemon=True).start()
 
 
 def mark_squad_started(poll_id: str, now: datetime) -> dict | None:
@@ -1624,43 +1665,64 @@ def update_fixed_pair_locked(kind: str, a: str, b: str) -> bool:
     return True
 
 
-def _fixed_job(title: str, members: list[str], kind: str, a: str, b: str, seven: bool) -> None:
-    """백그라운드: git pull → 고정 조건 저장 → git push → 팀짜기 → push → 스쿼드 페이지 갱신."""
-    import subprocess
+FIXED_WORDS = {"same": "같은팀", "diff": "다른팀", "none": "팀삭제", "all": "팀삭제 전체"}
+
+
+def _fixed_job(title: str, members: list[str], kind: str, a: str, b: str, seven: bool,
+               notify: str | None = None) -> None:
+    """백그라운드: git pull → 고정 조건 저장 → git push → 팀짜기 → push → 스쿼드 페이지 갱신. 실패하면 방에 알린다."""
+    what = FIXED_WORDS[kind] + (f" {a} · {b}" if a else "")
+    fail = None
     with SQUAD_LOCK:
         try:
             pull_squad()
             if not update_fixed_pair_locked(kind, a, b):
-                return
-            push_squad(f"고정 조건 변경: {({'same': '같은팀', 'diff': '다른팀', 'none': '팀삭제', 'all': '팀삭제 전체'})[kind]} {a} {b}")
-            build_squad_html(members, "auto", seven)
-            pushed = push_squad(f"팀 구성 업데이트: {title}")
-            ok = publish_squad()
-            print(f"고정 팀짜기 {title}: {'완료' if ok else '실패'}" + ("" if pushed else " (GitHub push 실패)"))
+                fail = f"{what} 저장 실패 (members.py 형식을 확인해 주세요)"
+            elif not push_squad(f"고정 조건 변경: {FIXED_WORDS[kind]} {a} {b}"):
+                fail = f"{what} 을(를) GitHub 에 저장하지 못했어요. 다시 입력해 주세요"
+            else:
+                build_squad_html(members, "auto", seven)
+                pushed = push_squad(f"팀 구성 업데이트: {title}")
+                ok = publish_squad()
+                print(f"고정 팀짜기 {title}: {'완료' if ok else '실패'}" + ("" if pushed else " (GitHub push 실패)"))
+                if not ok:
+                    fail = f"{what} 은(는) 저장했지만 스쿼드 페이지를 갱신하지 못했어요. '팀다시짜기'로 다시 시도해 주세요"
+                elif not pushed:
+                    fail = f"{what} 은(는) 저장했지만 새 팀을 GitHub 에 저장하지 못했어요. '팀다시짜기'로 다시 시도해 주세요"
         except Exception as e:
             print(f"고정 팀짜기 {title} 오류:", repr(e))
+            fail = f"{what} 처리 중 오류가 났어요 ({type(e).__name__}). 다시 입력해 주세요"
+    if fail:  # 잠금을 푼 뒤에 알린다
+        notify_room_sync(notify, f"⚠️ {fail}.")
 
 
-def _clear_fixed_job(title: str) -> None:
+def _clear_fixed_job(title: str, notify: str | None = None) -> None:
     """백그라운드: git pull → 같은팀/다른팀 고정 전체 삭제 → push (팀은 다시 짜지 않는다). 이미 비었으면 커밋 없음."""
+    fail = None
     with SQUAD_LOCK:
         try:
             pull_squad()
-            if update_fixed_pair_locked("all", "", ""):
-                push_squad(f"새 투표로 고정 조건 초기화: {title}")
+            if not update_fixed_pair_locked("all", "", ""):
+                fail = "members.py 형식을 확인해 주세요"
+            elif not push_squad(f"새 투표로 고정 조건 초기화: {title}"):
+                fail = "GitHub 에 저장하지 못했어요"
         except Exception as e:
             print(f"고정 조건 초기화 {title} 오류:", repr(e))
+            fail = f"오류가 났어요 ({type(e).__name__})"
+    if fail:
+        notify_room_sync(notify, f"⚠️ 새 투표의 같은팀/다른팀 고정 초기화 실패: {fail}.\n'팀삭제'로 직접 지워 주세요.")
 
 
-def start_clear_fixed_pairs(title: str) -> None:
-    threading.Thread(target=_clear_fixed_job, args=(title,), daemon=True).start()
+def start_clear_fixed_pairs(title: str, room: str | None = None) -> None:
+    threading.Thread(target=_clear_fixed_job, args=(title, _notify_target(room=room)), daemon=True).start()
 
 
 def start_fixed_pair(kind: str, a: str, b: str, poll: dict) -> None:
-    """같은팀/다른팀 고정을 저장하고 팀을 백그라운드에서 다시 짠다."""
+    """같은팀/다른팀 고정을 저장하고 팀을 백그라운드에서 다시 짠다. 실패하면 방에 알린다."""
     members = list(poll["attend"].values())
     seven = poll.get("place") == "조남"
-    threading.Thread(target=_fixed_job, args=(poll["title"], members, kind, a, b, seven), daemon=True).start()
+    threading.Thread(target=_fixed_job, args=(poll["title"], members, kind, a, b, seven, _notify_target(poll)),
+                     daemon=True).start()
 
 
 def make_team(room: str, no: int | None = None, game_mode: str = "auto") -> str:
@@ -1808,7 +1870,11 @@ def _poll_room(cmd: str, args: list[str], room: str, now: datetime | None) -> st
 def handle(text: str, user_key: str, room: str, now: datetime | None = None) -> tuple[str, list] | None:
     """카톡 명령 진입점. 상태 파일 잠금을 잡고 처리한다."""
     with _STATE_LOCK:
-        return _handle_unlocked(text, user_key, room, now)
+        _CMD_CTX.room = room  # 이 명령이 시작한 백그라운드 작업이 실패하면 이 방에 알린다
+        try:
+            return _handle_unlocked(text, user_key, room, now)
+        finally:
+            _CMD_CTX.room = None
 
 
 def _handle_unlocked(text: str, user_key: str, room: str, now: datetime | None = None) -> tuple[str, list] | None:
