@@ -1688,7 +1688,7 @@ def make_team(room: str, no: int | None = None, game_mode: str = "auto") -> str:
 def _poll_summary_base(p: dict) -> str:
     att, absn = list(p["attend"].values()), list(p["absent"].values())
     return "\n".join([
-        f"🗳 {p.get('no', '')}번 · {p['title']}" + (f"\n📝 {p['desc']}" if p.get("desc") else ""),
+        f"🗳 {p['title']}" + (f"\n📝 {p['desc']}" if p.get("desc") else ""),
         f"마감: {fmt_deadline(p['closed_at'] if p.get('closed_at') else p['deadline'])}"
         + (" (마감됨)" if p.get("closed_at") else ""),
         f"\n참석 {len(att)}명: {', '.join(att) if att else '-'}",
