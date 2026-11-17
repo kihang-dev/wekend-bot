@@ -93,6 +93,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 • 스쿼드 / 팀짜기 / 팀다시짜기
 • 팀짜기 매칭 — 6명↑ / 팀짜기 자체 — 10명↑
 • 같은팀·다른팀 [이름1] [이름2] — 마감 후 고정 (새 투표 때 초기화)
+• 같은팀·다른팀 — 이름 없이 = 지금 고정 조회
 • 팀삭제 ([이름1] [이름2]) — 생략 = 고정 전체 삭제
 
 👥 선수
@@ -1633,6 +1634,17 @@ def fix_open_deadlines(now: datetime) -> int:
     return fixed
 
 
+def read_fixed_pairs() -> tuple[list[tuple], list[tuple]]:
+    """members.py 의 (같은팀 고정, 다른팀 고정) 목록을 읽는다 (조회용, 파일만 읽음)."""
+    import ast, re
+    src = (SQUAD_REPO / "members.py").read_text(encoding="utf-8")
+    out = []
+    for key in ("FIXED_SAME_TEAM", "FIXED_DIFF_TEAM"):
+        m = re.search(key + r"\s*=\s*(\[.*?\])", src, flags=re.S)
+        out.append([tuple(x) for x in ast.literal_eval(m.group(1))] if m else [])
+    return out[0], out[1]
+
+
 def update_fixed_pair_locked(kind: str, a: str, b: str) -> bool:
     """members.py 의 FIXED_SAME_TEAM / FIXED_DIFF_TEAM 에서 이 쌍을 빼고, kind 에 맞는 쪽에 넣는다.
     SQUAD_LOCK 을 잡은 상태에서 호출. 같은 쌍이 반대쪽에 있으면 자동으로 옮겨진다."""
@@ -2316,8 +2328,16 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
                 "⚽ 저장한 뒤 팀을 다시 짜는 중이에요. 잠시 후 스쿼드 페이지에 반영됩니다."), []
 
     if cmd in ("같은팀", "다른팀", "팀삭제"):  # 팀삭제 김민규 김기항 → 두 사람의 고정 조건 삭제 / 같은팀 김민규 김기항 → 같은 팀 고정 / 다른팀 … → 다른 팀 고정 (저장 후 팀 다시 짜기)
+        if not args and cmd in ("같은팀", "다른팀"):  # 이름 없이 → 지금 걸린 고정 조건 조회
+            try:
+                same, diff = read_fixed_pairs()
+            except Exception as e:
+                print("고정 조건 읽기 오류:", repr(e))
+                return "⚠️ 고정 조건을 읽지 못했어요. (스쿼드 저장소의 members.py 확인 필요)", []
+            fmt = lambda lst: ", ".join(f"{x} · {y}" for x, y in lst) if lst else "없음"
+            return f"📌 팀 고정\n같은 팀: {fmt(same)}\n다른 팀: {fmt(diff)}", []
         if len(args) != 2:
-            return "사용법: 같은팀 [이름1] [이름2] / 다른팀 [이름1] [이름2] / 팀삭제 [이름1] [이름2] (전체 초기화는 팀삭제만)\n예) 같은팀 김민규 김기항", []
+            return "사용법: 같은팀 [이름1] [이름2] / 다른팀 [이름1] [이름2] / 팀삭제 [이름1] [이름2] (전체 초기화는 팀삭제만)\n이름 없이 같은팀 또는 다른팀 → 지금 고정 조회\n예) 같은팀 김민규 김기항", []
         if args[0] == args[1]:
             return "같은 사람끼리는 묶을 수 없어요.", []
         poll = latest_poll_any_room()
