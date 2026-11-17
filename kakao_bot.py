@@ -281,6 +281,9 @@ def load_polls() -> dict:
             if not p.get("no"):  # 투표 번호: 한 번 붙으면 투표를 지워도 바뀌지 않는다
                 p["no"] = next_no(lst)
                 changed = True
+            if p.get("date") and p.get("place") and p.get("title") != poll_title(p["date"], p["place"]):
+                p["title"] = poll_title(p["date"], p["place"])  # 예전 제목('261121 달월')도 새 형식으로
+                changed = True
         polls[r] = lst
     if changed:
         _save(POLLS_FILE, polls)
@@ -318,8 +321,16 @@ def _require(polls: dict, room: str, now: datetime | None = None) -> dict:
     return opened[-1] if opened else lst[-1]
 
 
+def poll_title(date_str: str, place: str) -> str:
+    """'261121', '달월' → '26년 11월 21일 토요일 달월 경기'"""
+    d = parse_date(date_str)
+    if not d:
+        return f"{date_str} {place} 경기"
+    return f"{d:%y}년 {d.month:02d}월 {d.day:02d}일 {'월화수목금토일'[d.weekday()]}요일 {place} 경기"
+
+
 def _retitle(poll: dict) -> None:
-    poll["title"] = f"{poll['date']} {poll['place']}"
+    poll["title"] = poll_title(poll["date"], poll["place"])
 
 
 def get_poll(room: str) -> dict:
