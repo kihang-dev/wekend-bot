@@ -2873,8 +2873,8 @@ async def send_unanswered(token: str, room: str, p: dict, head: str) -> None:
             shown.append("{{#mentions." + tag + "}}")
         else:
             shown.append(n)
-    text = (f"{head} 아직 응답하지 않은 분 {len(waiting)}명: " + ", ".join(shown)
-            + f"\n'{p['title']}' 참석 여부 부탁드려요.\n\n⏳ 마감: {fmt_deadline(p['deadline'])}")
+    text = (f"{head}\n아직 응답하지 않은 분 {len(waiting)}명: " + ", ".join(shown)
+            + f"\n⚽ {p['title']} ⚽\n참석 여부 부탁드려요.\n\n⏳ 마감: {fmt_deadline(p['deadline'])}")
     await send_room_message(token, room, text, mentions, vote_buttons(p))
 
 
