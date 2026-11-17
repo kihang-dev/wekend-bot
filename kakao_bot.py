@@ -322,11 +322,11 @@ def _require(polls: dict, room: str, now: datetime | None = None) -> dict:
 
 
 def poll_title(date_str: str, place: str) -> str:
-    """'261121', '달월' → '11월 21일 토요일 달월 경기'"""
+    """'261121', '달월' → '11월 21일 토요일 경기' (장소는 제목에 넣지 않는다)"""
     d = parse_date(date_str)
     if not d:
-        return f"{date_str} {place} 경기"
-    return f"{d.month:02d}월 {d.day:02d}일 {'월화수목금토일'[d.weekday()]}요일 {place} 경기"
+        return f"{date_str} 경기"
+    return f"{d.month:02d}월 {d.day:02d}일 {'월화수목금토일'[d.weekday()]}요일 경기"
 
 
 def _retitle(poll: dict) -> None:
