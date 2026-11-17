@@ -2736,10 +2736,10 @@ def _weekly_tick_unlocked(now: datetime) -> tuple[str, dict | None]:
 
 async def send_weekly_notice(token: str, poll: dict) -> None:
     """정기 투표가 열렸다는 안내와 참석/불참 버튼을 보낸다."""
-    mm, dd = poll["date"][2:4], poll["date"][4:6]
-    wd = WEEKDAY_CHARS[datetime.strptime(poll["date"], "%y%m%d").weekday()]
-    text = (f"🗳 다음 주 {wd}요일({mm}/{dd}) 정기풋살 투표가 열렸어요.\n"
-            f"마감 {fmt_deadline(poll['deadline'])}")
+    text = (f"🗳 다음 주 정기풋살 투표가 열렸어요!\n"
+            f"⚽ {poll['title']} ⚽\n"
+            f"참석 여부 부탁드려요.\n\n"
+            f"⏳ 마감: {fmt_deadline(poll['deadline'])}")
     await send_room_message(token, WEEKLY_POLL["room"], text, {}, vote_buttons(poll))
 
 
