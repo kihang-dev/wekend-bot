@@ -51,6 +51,7 @@ WEEKLY_POLL = {
 }
 USERS_FILE = HERE / "users.json"
 ROOM_MEMBERS_FILE = HERE / "room_members.json"
+SQUAD_STATE_FILE = HERE / "squad_state.json"  # 스쿼드 페이지에 지금 올라간 팀이 어느 투표 것인지 (팀 작업 스레드만 씀)
 DORMANT_FILE = HERE / "dormant.json"  # 휴면 인원 (미응답 명단에서 제외)  # 방별 botUserKey -> 이름 (이 방에서 실제로 쓰인 키만)
 SETTINGS_FILE = HERE / "settings.json"  # 경기 시간 같은 설정 (깃에 올리지 않음)
 LINK_FILE = HERE / "link_codes.json"  # 일반/오픈채팅 연결용 임시 코드 (깃에 올리지 않음)
@@ -1572,6 +1573,16 @@ def notify_room_sync(room: str | None, text: str) -> None:
         print("실패 알림 전송 오류:", repr(e))
 
 
+def _remember_squad_build(title: str) -> None:
+    """방금 팀을 짠 투표 제목을 기록한다 (팀조회에서 어느 경기 팀인지 보여줄 때 씀). SQUAD_LOCK 안에서 호출."""
+    _save(SQUAD_STATE_FILE, {"title": title, "at": now_kst().isoformat()})
+
+
+def _latest_closed_poll(now: datetime | None = None) -> dict | None:
+    closed = [p for lst in load_polls().values() for p in (lst or []) if is_closed(p, now)]
+    return max(closed, key=lambda p: p.get("created") or "", default=None)
+
+
 def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = False, reset_members: bool = False,
                notify: str | None = None) -> None:
     fail = None
@@ -1585,6 +1596,7 @@ def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = Fal
                 print(f"팀짜기 {title}: 참석자가 없어 건너뜀")
                 return
             build_squad_html(members, game_mode, seven)
+            _remember_squad_build(title)
             pushed = push_squad(f"팀 구성 업데이트: {title}")  # GitHub 에 커밋·푸시
             ok = publish_squad()  # VM 웹 페이지 갱신
             print(f"팀짜기 {title}: {'완료' if ok else '실패'}" + ("" if pushed else " (GitHub push 실패)"))
@@ -1675,9 +1687,16 @@ def read_squad_teams() -> str:
         return json.loads(m.group(1)) if m else None
 
     updated = datetime.fromtimestamp(path.stat().st_mtime, KST)
-    poll = latest_poll_any_room()
-    head = f"⚽ {poll['title']} 팀" if poll else "⚽ 팀"
+    # 어느 투표의 팀인지: 팀을 짤 때 기록한 제목 → 없으면(예전 결과) 가장 최근 마감된 투표
+    title = _load(SQUAD_STATE_FILE).get("title")
+    if not title:
+        last = _latest_closed_poll()
+        title = last["title"] if last else None
+    head = f"⚽ {title} 팀" if title else "⚽ 팀"
     foot = f"\n\n🕒 {updated:%m/%d %H:%M} 기준 · 자세히: {SQUAD_URL}"
+    cur = latest_poll_any_room()
+    if cur and not is_closed(cur) and cur["title"] != title:
+        foot = f"\nℹ️ '{cur['title']}' 투표는 진행중이라 마감 후에 팀을 짜요." + foot
 
     def team_lines(a, b):
         return [f"⚫ 블랙 {len(a)}명: {', '.join(a)}", f"⚪ 화이트 {len(b)}명: {', '.join(b)}"]
@@ -1753,6 +1772,7 @@ def _fixed_job(title: str, members: list[str], kind: str, a: str, b: str, seven:
                 fail = f"{what} 을(를) GitHub 에 저장하지 못했어요. 다시 입력해 주세요"
             else:
                 build_squad_html(members, "auto", seven)
+                _remember_squad_build(title)
                 pushed = push_squad(f"팀 구성 업데이트: {title}")
                 ok = publish_squad()
                 print(f"고정 팀짜기 {title}: {'완료' if ok else '실패'}" + ("" if pushed else " (GitHub push 실패)"))
