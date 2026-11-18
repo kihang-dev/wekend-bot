@@ -92,6 +92,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 
 ⚽ 팀
 • 스쿼드 / 팀짜기 / 팀다시짜기
+• 팀조회 — 짜인 팀을 글자로
 • 팀짜기 매칭 — 6명↑ / 팀짜기 자체 — 10명↑
 • 같은팀·다른팀 [이름1] [이름2] — 마감 후 고정 (새 투표 때 초기화)
 • 같은팀·다른팀 — 이름 없이 = 지금 고정 조회
@@ -1663,6 +1664,35 @@ def fix_open_deadlines(now: datetime) -> int:
     return fixed
 
 
+def read_squad_teams() -> str:
+    """스쿼드 저장소의 index.html 에 들어 있는 팀 결과(DATA/SMALL/EXT)를 카톡용 글자로 정리한다."""
+    import re
+    path = SQUAD_REPO / "index.html"
+    src = path.read_text(encoding="utf-8")
+
+    def const(name):
+        m = re.search(r"const " + name + r" = (.*?);\n", src)
+        return json.loads(m.group(1)) if m else None
+
+    updated = datetime.fromtimestamp(path.stat().st_mtime, KST)
+    poll = latest_poll_any_room()
+    head = f"⚽ {poll['title']} 팀" if poll else "⚽ 팀"
+    foot = f"\n\n🕒 {updated:%m/%d %H:%M} 기준 · 자세히: {SQUAD_URL}"
+
+    def team_lines(a, b):
+        return [f"⚫ 블랙 {len(a)}명: {', '.join(a)}", f"⚪ 화이트 {len(b)}명: {', '.join(b)}"]
+
+    data, small, ext = const("DATA"), const("SMALL"), const("EXT")
+    if data:
+        main = data[0]
+        return "\n".join([head] + team_lines(main["team_a"], main["team_b"])) + foot
+    if small:
+        return "\n".join([head + " (소수 자체전)"] + team_lines(small["team_a"], small["team_b"])) + foot
+    if ext:
+        return f"{head}\n외부 매칭이라 블랙·화이트 구분이 없어요. 경기별 명단은 스쿼드 페이지에서 확인해 주세요." + foot
+    return "아직 짜인 팀이 없어요. 투표가 마감되면 팀을 짜요."
+
+
 def read_fixed_pairs() -> tuple[list[tuple], list[tuple]]:
     """members.py 의 (같은팀 고정, 다른팀 고정) 목록을 읽는다 (조회용, 파일만 읽음)."""
     import ast, re
@@ -1799,7 +1829,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "취준", "학생", "이력", "정기", "명단삭제", "등급시트", "회비", "지각", "노쇼", "이자", "지출", "회비시트", "지각시트", "노쇼시트", "이자시트", "지출시트", "지각삭제", "노쇼삭제", "이자삭제", "지출삭제", "결산시트", "마감", "멘션확인"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "취준", "학생", "이력", "정기", "명단삭제", "등급시트", "회비", "지각", "노쇼", "이자", "지출", "회비시트", "지각시트", "노쇼시트", "이자시트", "지출시트", "지각삭제", "노쇼삭제", "이자삭제", "지출삭제", "결산시트", "마감", "멘션확인", "팀조회"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -2122,6 +2152,13 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
             _save(SCHEDULE_FILE, marks)
         add_history(poll, _actor_name(user_key), cmd, f"마감: {fmt_deadline(old)} → {fmt_deadline(poll['deadline'])}", now)
         return f"⏳ '{poll['title']}' 마감을 {fmt_deadline(old)} → {fmt_deadline(poll['deadline'])} 으로 바꿨어요.", []
+
+    if cmd == "팀조회":  # 짜인 팀을 카톡에 글자로
+        try:
+            return read_squad_teams(), []
+        except Exception as e:
+            print("팀 결과 읽기 오류:", repr(e))
+            return f"⚠️ 팀 결과를 읽지 못했어요. 스쿼드 페이지에서 확인해 주세요: {SQUAD_URL}", []
 
     if cmd == "멘션확인":  # 정기 투표 방에서 멘션이 되는 사람 / 안 되는 사람
         mroom = WEEKLY_POLL["room"]
