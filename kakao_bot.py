@@ -84,6 +84,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 • 참석·불참 [이름1] (이름2) … — 대신 바꾸기
 • 교체 [불참할 이름] [참석할 이름]
 • 장소 [장소] / 날짜 [YYMMDD] / 시간 (시작 시각)
+• 마감 (MM/DD) (HH:MM) — 마감 조회·변경, 시간 생략 = 23:00
 • 투표종료·투표완료·투표삭제·투표조회 (번호)
 • 이력 (번호) — 변경 이력
 • 정기 ([요일] [HH:MM]) — 정기 투표 시각
@@ -98,6 +99,7 @@ HELP_TEXT = """📖 위켄봇 사용법
 
 👥 선수
 • 명단 / 명단삭제 [이름]
+• 멘션확인 — 정기 투표 방에서 멘션 안 되는 사람
 • 신규 [이름] [등급6개] [포지션1/포지션2]
    예) 신규 홍길동 BBCCBA ST/CB
 • 포지션 [이름] (포지션1/포지션2)
@@ -231,6 +233,32 @@ def calc_deadline(base: datetime) -> datetime:
     """투표를 만든 날(base) 기준 다음주 수요일 23:00 (월요일 시작 기준)"""
     next_monday = base - timedelta(days=base.weekday()) + timedelta(days=7)
     return (next_monday + timedelta(days=2)).replace(hour=23, minute=0, second=0, microsecond=0)
+
+
+def parse_deadline_arg(args: list[str], now: datetime) -> datetime | None:
+    """['11/19'] / ['11/19', '21:00'] / ['11/19', '21'] → 마감 시각 (KST). 시간 생략 = 23:00. 형식이 틀리면 None.
+    올해 날짜가 이미 한참 지났으면(예: 12월에 1/3) 내년으로 본다."""
+    import re
+    if not 1 <= len(args) <= 2:
+        return None
+    m = re.fullmatch(r"(\d{1,2})[/.](\d{1,2})", args[0])
+    if not m:
+        return None
+    hh, mm = 23, 0
+    if len(args) == 2:
+        t = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?(?:시)?", args[1])
+        if not t:
+            return None
+        hh, mm = int(t.group(1)), int(t.group(2) or 0)
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            return None
+    try:
+        d = datetime(now.year, int(m.group(1)), int(m.group(2)), hh, mm, tzinfo=KST)
+    except ValueError:
+        return None
+    if d < now - timedelta(days=180):
+        d = d.replace(year=now.year + 1)
+    return d
 
 
 def fmt_deadline(iso: str) -> str:
@@ -551,8 +579,9 @@ def update_poll(room: str, date_str: str | None = None, place: str | None = None
         if not date:
             raise PollError("날짜는 YYMMDD 형식으로 입력해주세요. 예) 261024")
         poll["date"] = date_str
-        base = datetime.fromisoformat(poll["created"]) if poll.get("created") else now_kst()
-        poll["deadline"] = calc_deadline(base).isoformat()
+        if not poll.get("deadline_custom"):  # '마감' 명령으로 직접 정한 마감은 날짜를 바꿔도 그대로 둔다
+            base = datetime.fromisoformat(poll["created"]) if poll.get("created") else now_kst()
+            poll["deadline"] = calc_deadline(base).isoformat()
     if place is not None:
         if not place.strip():
             raise PollError("장소를 입력해주세요.")
@@ -1770,7 +1799,7 @@ def _poll_summary_base(p: dict) -> str:
     ])
 
 
-COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "취준", "학생", "이력", "정기", "명단삭제", "등급시트", "회비", "지각", "노쇼", "이자", "지출", "회비시트", "지각시트", "노쇼시트", "이자시트", "지출시트", "지각삭제", "노쇼삭제", "이자삭제", "지출삭제", "결산시트"}
+COMMANDS = {"도움말", "이름", "투표", "참석", "불참", "멤버", "스쿼드", "명단", "포지션", "등급", "신규", "장소", "날짜", "투표종료", "투표완료", "투표조회", "투표삭제", "용병", "팀짜기", "팀다시짜기", "시간", "연결", "선출", "같은팀", "다른팀", "팀삭제", "교체", "방키", "미응답", "휴면", "취준", "학생", "이력", "정기", "명단삭제", "등급시트", "회비", "지각", "노쇼", "이자", "지출", "회비시트", "지각시트", "노쇼시트", "이자시트", "지출시트", "지각삭제", "노쇼삭제", "이자삭제", "지출삭제", "결산시트", "마감", "멘션확인"}
 ALIASES = {"투표완료": "투표종료"}  # 마감 전에 투표를 끝내는 말 두 가지 모두 같은 명령
 
 
@@ -1838,12 +1867,12 @@ def room_key_names(room: str) -> dict:
 
 
 # 투표 상태를 바꾸거나 보는 명령은 방과 상관없이 '진행중인 투표'를 기준으로 한다
-POLL_SCOPED = {"참석", "불참", "투표종료", "투표삭제", "투표조회", "이력", "멤버", "장소", "날짜", "교체", "용병",
+POLL_SCOPED = {"마감", "참석", "불참", "투표종료", "투표삭제", "투표조회", "이력", "멤버", "장소", "날짜", "교체", "용병",
                "팀짜기", "팀다시짜기", "시간", "같은팀", "다른팀", "팀삭제", "미응답"}
 
 
 # 마감 뒤에도 다음 투표가 생기기 전까지는 가장 최근 투표를 대상으로 하는 명령
-LATEST_SCOPED = {"참석", "불참", "멤버", "이력", "용병"}
+LATEST_SCOPED = {"참석", "불참", "멤버", "이력", "용병", "마감"}
 
 
 def latest_poll_room() -> str | None:
@@ -2068,6 +2097,51 @@ def _dispatch(cmd: str, args: list[str], user_key: str, room: str, now: datetime
 
     if cmd == "방키":  # 이 방의 키 (정기 투표 방 설정용)
         return f"이 방의 키예요.\n{room}", []
+
+    if cmd == "마감":  # 마감 → 지금 마감 시각 / 마감 11/19 → 11/19 23:00 / 마감 11/19 21:00
+        polls = load_polls()
+        poll = _require(polls, room, now)
+        if not args:
+            state = "마감됨" if is_closed(poll, now) else "진행중"
+            return (f"⏳ '{poll['title']}' ({state}) 마감: {fmt_deadline(poll.get('closed_at') or poll['deadline'])}\n"
+                    "바꾸려면: 마감 [MM/DD] (HH:MM)  예) 마감 11/19 21:00"), []
+        if is_closed(poll, now):
+            return f"'{poll['title']}' 투표는 이미 마감됐어요. 진행중인 투표의 마감만 바꿀 수 있어요.", []
+        new = parse_deadline_arg(args, now or now_kst())
+        if new is None:
+            return "사용법: 마감 [MM/DD] (HH:MM)  예) 마감 11/19 · 마감 11/19 21:00 (시간 생략 = 23:00)", []
+        if new <= (now or now_kst()):
+            return "마감은 지금보다 뒤로 정해 주세요.", []
+        old = poll["deadline"]
+        poll["deadline"] = new.isoformat()
+        poll["deadline_custom"] = True
+        _save(POLLS_FILE, polls)
+        marks = _load(SCHEDULE_FILE)  # 마감 1시간 전 알림을 새 마감 기준으로 다시 보낼 수 있게
+        if poll.get("id") in marks.get("reminded", []):
+            marks["reminded"] = [x for x in marks["reminded"] if x != poll["id"]]
+            _save(SCHEDULE_FILE, marks)
+        add_history(poll, _actor_name(user_key), cmd, f"마감: {fmt_deadline(old)} → {fmt_deadline(poll['deadline'])}", now)
+        return f"⏳ '{poll['title']}' 마감을 {fmt_deadline(old)} → {fmt_deadline(poll['deadline'])} 으로 바꿨어요.", []
+
+    if cmd == "멘션확인":  # 정기 투표 방에서 멘션이 되는 사람 / 안 되는 사람
+        mroom = WEEKLY_POLL["room"]
+        keys = room_key_names(mroom)
+        roster = roster_names()
+        if not roster:
+            return "⚠️ 선수 명단을 읽지 못했어요.", []
+        ok = [n for n in roster if n in keys]
+        miss = [n for n in roster if n not in keys]
+        lines = [f"🔔 멘션 확인 (정기 투표 방)", f"✅ 멘션 됨 {len(ok)}명 / 명단 {len(roster)}명"]
+        if miss:
+            lines.append(f"❌ 멘션 안 됨 {len(miss)}명: {', '.join(miss)}")
+            lines.append("→ 정기 투표 방에서 한 번 참석·불참을 누르면 멘션돼요.")
+        else:
+            lines.append("모두 멘션돼요.")
+        odd = sorted(n for n in keys if n not in roster and n not in dormant_names())
+        if odd:
+            lines.append(f"\n❓ 명단에 없는 이름으로 등록된 사람: {', '.join(odd)}")
+            lines.append("→ 명단 이름과 다르면 '이름 [명단 이름]'으로 다시 등록해 주세요.")
+        return "\n".join(lines), []
 
     if cmd == "시간":  # 시간 7 → 이번 투표 07:00~09:00 / 시간 10 → 10:00~12:00 (새 투표는 기본 8시)
         poll = latest_poll_any_room()
