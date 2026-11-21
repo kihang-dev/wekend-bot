@@ -1573,6 +1573,13 @@ def notify_room_sync(room: str | None, text: str) -> None:
         print("실패 알림 전송 오류:", repr(e))
 
 
+MIN_TEAM_PLAYERS = 6  # 팀을 짤 수 있는 최소 인원 (매칭 6명↑, 자체 10명↑)
+
+
+class _ShortHanded(Exception):
+    """참석 인원이 모자라 팀을 짜지 않을 때 (실패 아님, 안내만)."""
+
+
 def _remember_squad_build(title: str) -> None:
     """방금 팀을 짠 투표 제목을 기록한다 (팀조회에서 어느 경기 팀인지 보여줄 때 씀). SQUAD_LOCK 안에서 호출."""
     _save(SQUAD_STATE_FILE, {"title": title, "at": now_kst().isoformat()})
@@ -1595,6 +1602,9 @@ def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = Fal
             if not members:
                 print(f"팀짜기 {title}: 참석자가 없어 건너뜀")
                 return
+            if len(members) < MIN_TEAM_PLAYERS:  # 인원이 모자라면 팀을 짜지 않고 안내만
+                print(f"팀짜기 {title}: 참석자 {len(members)}명이라 건너뜀")
+                raise _ShortHanded()
             build_squad_html(members, game_mode, seven)
             _remember_squad_build(title)
             pushed = push_squad(f"팀 구성 업데이트: {title}")  # GitHub 에 커밋·푸시
@@ -1605,9 +1615,21 @@ def _squad_job(title: str, members: list[str], game_mode: str, seven: bool = Fal
             elif not pushed:
                 fail = "팀은 짰지만 GitHub 에 저장하지 못했어요"
         except Exception as e:
-            print(f"팀짜기 {title} 오류:", repr(e))
-            fail = f"오류가 났어요 ({type(e).__name__})"
-    if fail:  # 잠금을 푼 뒤에 알린다
+            if isinstance(e, _ShortHanded) or type(e).__name__ == "NotEnoughPlayersError":
+                fail = "short"
+            else:
+                print(f"팀짜기 {title} 오류:", repr(e))
+                fail = f"오류가 났어요 ({type(e).__name__})"
+    if fail == "short":
+        need = 10 if game_mode == "self" else MIN_TEAM_PLAYERS
+        if len(members) < need:
+            msg = (f"📭 '{title}' 참석자가 {len(members)}명이라 팀을 짜지 않았어요.\n"
+                   f"{need}명 이상이 되면 '팀다시짜기'로 짜 주세요.")
+        else:
+            msg = (f"📭 '{title}' 참석자 {len(members)}명으로는 팀 인원이 맞지 않아 팀을 짜지 못했어요.\n"
+                   "'팀짜기 매칭' 또는 '팀짜기 자체'로 다시 시도해 주세요.")
+        notify_room_sync(notify, msg)
+    elif fail:  # 잠금을 푼 뒤에 알린다
         notify_room_sync(notify, f"⚠️ '{title}' 팀 구성 실패: {fail}.\n잠시 후 '팀다시짜기'로 다시 시도해 주세요.")
 
 
